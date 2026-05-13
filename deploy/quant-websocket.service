@@ -1,0 +1,15 @@
+[Unit]
+Description=Quant Futures Testnet WebSocket Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/quant-futures-bot
+EnvironmentFile=/opt/quant-futures-bot/.env
+ExecStart=/opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.websocket_monitor --print-seconds 5
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

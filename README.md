@@ -376,3 +376,37 @@ deploy/README_ubuntu.md
 curl https://testnet.binancefuture.com/fapi/v1/time
 curl https://fapi.binance.com/fapi/v1/time
 ```
+
+## WebSocket 实时盯盘
+
+普通 `live_monitor` 默认每 60 秒轮询一次。WebSocket 版本会连接 Binance Futures 实时行情：
+
+- `bookTicker`：实时接收买一卖一价格，默认每 5 秒打印一次实时价格
+- `strategy_timer`：按照当前各币种选中的 4H/6H 周期判断是否换线
+- 4H/6H 换线时自动运行一轮策略判断和下单逻辑
+- 启动时也会先运行一轮策略，用来同步测试账户权益、持仓和订单状态
+
+本地测试盘运行：
+
+```bat
+run_testnet_websocket.bat
+```
+
+服务器手动运行：
+
+```bash
+cd /opt/quant-futures-bot
+source /opt/miniconda/etc/profile.d/conda.sh
+conda activate quant-bot
+set -a; source .env; set +a
+python -m quant_futures_bot.websocket_monitor --print-seconds 5
+```
+
+日志字段说明：
+
+- `websocket_tick`：实时价格心跳，只表示行情在更新
+- `timeframe_closed`：某个 4H/6H 周期换线
+- `strategy_cycle`：因为启动或周期换线触发了一轮策略执行
+- `signals/orders_created/fills_created`：本轮是否产生信号、订单和成交
+
+如果要用 systemd 长期运行，可以使用 `deploy/quant-websocket.service`。

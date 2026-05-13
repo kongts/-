@@ -20,6 +20,24 @@ curl https://testnet.binancefuture.com/fapi/v1/time
 curl https://fapi.binance.com/fapi/v1/time
 ```
 
+## WebSocket 实时盯盘服务
+
+如果要把 60 秒轮询监控切换为 WebSocket 实时盯盘：
+
+```bash
+cd /opt/quant-futures-bot
+git pull
+/opt/miniconda/envs/quant-bot/bin/pip install -r requirements.txt
+
+sudo cp deploy/quant-websocket.service /etc/systemd/system/quant-websocket.service
+sudo systemctl daemon-reload
+sudo systemctl stop quant-monitor.service
+sudo systemctl enable --now quant-websocket.service
+journalctl -u quant-websocket.service -f
+```
+
+WebSocket 服务会实时打印 `websocket_tick` 价格心跳，并在 4H/6H 周期换线时打印 `timeframe_closed`，随后触发一轮 `strategy_cycle`。
+
 能返回 `serverTime` 才继续部署。
 
 ## 3. 拉取项目
@@ -130,4 +148,3 @@ source .venv/bin/activate
 pip install -r requirements.txt
 sudo systemctl restart quant-monitor.service
 ```
-
