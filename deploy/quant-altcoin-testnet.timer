@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Altcoin Testnet Exchange Orders Every 15 Minutes
+
+[Timer]
+OnBootSec=7min
+OnUnitActiveSec=15min
+Unit=quant-altcoin-testnet.service
+
+[Install]
+WantedBy=timers.target

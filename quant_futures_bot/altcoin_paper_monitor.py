@@ -9,7 +9,7 @@ from pathlib import Path
 from .config import DATA_DIR, FEE_RATE, LOG_DIR
 from .data import MarketDataProvider
 from .events import OrderStatus, SignalEvent, SignalType
-from .execution import PaperExecution
+from .execution import BinanceTestnetExecution, PaperExecution
 from .indicators import add_indicators
 from .market_state import detect_market_state
 from .order_manager import OrderManager
@@ -36,10 +36,20 @@ class AltcoinPaperMonitor:
         leverage: int = 2,
         stop_loss_pct: float = 0.025,
         take_profit_pct: float = 0.06,
+        execution_mode: str = "paper",
+        confirm_exchange_orders: str = "",
     ) -> None:
+        if execution_mode not in {"paper", "testnet"}:
+            raise ValueError("execution_mode must be paper or testnet")
+        if execution_mode == "testnet" and confirm_exchange_orders != "YES":
+            raise RuntimeError("testnet exchange orders require --confirm-exchange-orders YES")
+        if execution_mode == "testnet":
+            state_path = DATA_DIR / "altcoin_testnet_state.json"
+            latest_path = DATA_DIR / "altcoin_testnet_latest.json"
         self.strategy_path = strategy_path
         self.state_path = state_path
         self.latest_path = latest_path
+        self.execution_mode = execution_mode
         self.top = top
         self.candle_limit = candle_limit
         self.max_margin_ratio = max_margin_ratio
@@ -49,16 +59,17 @@ class AltcoinPaperMonitor:
         self.data_provider = MarketDataProvider(use_exchange=True, fallback_to_synthetic=False)
         self.portfolio = self.load_portfolio()
         self.pause_manager = PauseManager()
-        self.execution = PaperExecution()
+        self.execution = BinanceTestnetExecution() if execution_mode == "testnet" else PaperExecution()
         self.order_manager = OrderManager()
 
     def run_once(self) -> None:
         leaders = self.load_leaders()
         cycle_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.log(f"[{cycle_started_at}] start altcoin paper cycle leaders={len(leaders)} top={self.top}")
+        self.log(f"[{cycle_started_at}] start altcoin {self.execution_mode} cycle leaders={len(leaders)} top={self.top}")
         signals_created = 0
         fills_created = 0
         rejected = 0
+        exchange_order_ids: list[str] = []
         for leader in leaders[: self.top]:
             symbol = leader["symbol"]
             strategy_id = leader["strategy_id"]
@@ -70,9 +81,10 @@ class AltcoinPaperMonitor:
                 self.portfolio.update_market_price(symbol, price)
                 exit_signal = self.stop_or_take_profit_signal(symbol, price)
                 if exit_signal is not None:
-                    ok = self.execute_signal(exit_signal, latest_row)
+                    ok, order_ids = self.execute_signal(exit_signal, latest_row)
                     signals_created += 1
                     fills_created += 1 if ok else 0
+                    exchange_order_ids.extend(order_ids)
                     rejected += 0 if ok else 1
                     continue
                 manager = StrategyManager(strategy_id=strategy_id, use_saved_selection=False)
@@ -81,20 +93,22 @@ class AltcoinPaperMonitor:
                 signals = manager.generate(symbol, frame, market_state, current_side)
                 for signal in signals:
                     signals_created += 1
-                    ok = self.execute_signal(signal, latest_row)
+                    ok, order_ids = self.execute_signal(signal, latest_row)
                     fills_created += 1 if ok else 0
+                    exchange_order_ids.extend(order_ids)
                     rejected += 0 if ok else 1
             except Exception as exc:
                 self.log(f"symbol_error symbol={symbol} strategy={strategy_id}/{timeframe} error={exc}")
         self.save_portfolio()
-        self.write_latest(signals_created, fills_created, rejected)
+        self.write_latest(signals_created, fills_created, rejected, exchange_order_ids)
         self.log(
-            f"paper_summary equity={self.portfolio.equity:.2f} used_margin={self.portfolio.used_margin:.2f} "
+            f"{self.execution_mode}_summary equity={self.portfolio.equity:.2f} used_margin={self.portfolio.used_margin:.2f} "
             f"unrealized={self.portfolio.unrealized_pnl:.2f} realized={self.portfolio.realized_pnl:.2f} "
-            f"signals={signals_created} fills={fills_created} rejected={rejected} positions={self.format_positions()}"
+            f"signals={signals_created} fills={fills_created} rejected={rejected} "
+            f"exchange_order_ids={','.join(exchange_order_ids) or '-'} positions={self.format_positions()}"
         )
 
-    def execute_signal(self, signal: SignalEvent, latest_row: dict) -> bool:
+    def execute_signal(self, signal: SignalEvent, latest_row: dict) -> tuple[bool, list[str]]:
         symbol_configs = {
             signal.symbol: {
                 "symbol": signal.symbol,
@@ -107,21 +121,25 @@ class AltcoinPaperMonitor:
         risk = risk_engine.check_signal(signal, latest_row)
         if not risk.approved:
             self.log(f"signal_rejected symbol={signal.symbol} signal={signal.signal_type.value} reason={risk.reason}")
-            return False
+            return False, []
         qty = risk_engine.order_quantity(signal)
         if qty <= 0:
             self.log(f"signal_rejected symbol={signal.symbol} signal={signal.signal_type.value} reason=no quantity")
-            return False
+            return False, []
         order = self.order_manager.create_order(signal, qty)
         submitted = self.order_manager.update_status(order.order_id, OrderStatus.SUBMITTED)
-        fill = self.execution.execute(submitted)
+        if isinstance(self.execution, BinanceTestnetExecution):
+            fill = self.execution.execute(submitted, leverage=self.leverage)
+        else:
+            fill = self.execution.execute(submitted)
         pnl = self.portfolio.apply_fill(fill, leverage=float(self.leverage))
         self.order_manager.update_status(order.order_id, OrderStatus.FILLED)
         self.log(
-            f"paper_fill symbol={fill.symbol} action={fill.position_action.value} price={fill.fill_price:.6f} "
-            f"qty={fill.qty:.8f} fee={fill.fee:.4f} pnl={pnl:.4f}"
+            f"{self.execution_mode}_fill symbol={fill.symbol} action={fill.position_action.value} "
+            f"price={fill.fill_price:.6f} qty={fill.qty:.8f} fee={fill.fee:.4f} pnl={pnl:.4f} "
+            f"exchange_order_id={fill.exchange_order_id or '-'}"
         )
-        return True
+        return True, [fill.exchange_order_id] if fill.exchange_order_id else []
 
     def stop_or_take_profit_signal(self, symbol: str, price: float) -> SignalEvent | None:
         pos = self.portfolio.get_position(symbol)
@@ -158,10 +176,10 @@ class AltcoinPaperMonitor:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.state_path.write_text(json.dumps(self.portfolio.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
 
-    def write_latest(self, signals_created: int, fills_created: int, rejected: int) -> None:
+    def write_latest(self, signals_created: int, fills_created: int, rejected: int, exchange_order_ids: list[str]) -> None:
         payload = {
             "updated_at": datetime.now().isoformat(timespec="seconds"),
-            "mode": "paper",
+            "mode": self.execution_mode,
             "equity": self.portfolio.equity,
             "cash": self.portfolio.cash,
             "used_margin": self.portfolio.used_margin,
@@ -172,6 +190,7 @@ class AltcoinPaperMonitor:
             "signals_created": signals_created,
             "fills_created": fills_created,
             "rejected": rejected,
+            "exchange_order_ids": exchange_order_ids,
             "fee_rate": FEE_RATE,
             "positions": self.portfolio.to_dict()["positions"],
         }
@@ -187,17 +206,17 @@ class AltcoinPaperMonitor:
                 )
         return ";".join(active) or "-"
 
-    @staticmethod
-    def log(message: str) -> None:
+    def log(self, message: str) -> None:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         line = message if message.startswith("[") else f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}"
         print(line, flush=True)
-        with (LOG_DIR / "altcoin_paper.log").open("a", encoding="utf-8") as fh:
+        log_name = "altcoin_testnet.log" if getattr(self, "execution_mode", "paper") == "testnet" else "altcoin_paper.log"
+        with (LOG_DIR / log_name).open("a", encoding="utf-8") as fh:
             fh.write(line + "\n")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run paper trading monitor for latest altcoin aggressive strategies")
+    parser = argparse.ArgumentParser(description="Run paper/testnet trading monitor for latest altcoin aggressive strategies")
     parser.add_argument("--run-once", action="store_true", help="run once and exit")
     parser.add_argument("--interval-minutes", type=float, default=15.0, help="minutes between paper cycles")
     parser.add_argument("--top", type=int, default=5, help="number of latest leaders to paper trade")
@@ -206,6 +225,8 @@ def main() -> None:
     parser.add_argument("--leverage", type=int, default=2, help="paper leverage")
     parser.add_argument("--stop-loss-pct", type=float, default=0.025, help="stop loss percentage")
     parser.add_argument("--take-profit-pct", type=float, default=0.06, help="take profit percentage")
+    parser.add_argument("--execution-mode", choices=["paper", "testnet"], default="paper", help="paper or Binance testnet execution")
+    parser.add_argument("--confirm-exchange-orders", default="", help="set to YES to allow testnet exchange orders")
     args = parser.parse_args()
 
     monitor = AltcoinPaperMonitor(
@@ -215,6 +236,8 @@ def main() -> None:
         leverage=args.leverage,
         stop_loss_pct=args.stop_loss_pct,
         take_profit_pct=args.take_profit_pct,
+        execution_mode=args.execution_mode,
+        confirm_exchange_orders=args.confirm_exchange_orders,
     )
     if args.run_once:
         monitor.run_once()
