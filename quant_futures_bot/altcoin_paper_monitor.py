@@ -38,11 +38,17 @@ class AltcoinPaperMonitor:
         take_profit_pct: float = 0.06,
         execution_mode: str = "paper",
         confirm_exchange_orders: str = "",
+        order_type: str = "market",
+        maker_offset: float = 0.001,
     ) -> None:
         if execution_mode not in {"paper", "testnet"}:
             raise ValueError("execution_mode must be paper or testnet")
+        if order_type not in {"market", "limit"}:
+            raise ValueError("order_type must be market or limit")
         if execution_mode == "testnet" and confirm_exchange_orders != "YES":
             raise RuntimeError("testnet exchange orders require --confirm-exchange-orders YES")
+        if execution_mode == "testnet" and order_type != "limit":
+            raise RuntimeError("altcoin testnet exchange orders are limit-only; use --order-type limit")
         if execution_mode == "testnet":
             state_path = DATA_DIR / "altcoin_testnet_state.json"
             latest_path = DATA_DIR / "altcoin_testnet_latest.json"
@@ -50,6 +56,8 @@ class AltcoinPaperMonitor:
         self.state_path = state_path
         self.latest_path = latest_path
         self.execution_mode = execution_mode
+        self.order_type = order_type
+        self.maker_offset = maker_offset
         self.top = top
         self.candle_limit = candle_limit
         self.max_margin_ratio = max_margin_ratio
@@ -67,6 +75,7 @@ class AltcoinPaperMonitor:
         cycle_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.log(f"[{cycle_started_at}] start altcoin {self.execution_mode} cycle leaders={len(leaders)} top={self.top}")
         signals_created = 0
+        orders_created = 0
         fills_created = 0
         rejected = 0
         exchange_order_ids: list[str] = []
@@ -81,9 +90,10 @@ class AltcoinPaperMonitor:
                 self.portfolio.update_market_price(symbol, price)
                 exit_signal = self.stop_or_take_profit_signal(symbol, price)
                 if exit_signal is not None:
-                    ok, order_ids = self.execute_signal(exit_signal, latest_row)
+                    ok, filled, order_ids = self.execute_signal(exit_signal, latest_row)
                     signals_created += 1
-                    fills_created += 1 if ok else 0
+                    orders_created += 1 if ok else 0
+                    fills_created += 1 if filled else 0
                     exchange_order_ids.extend(order_ids)
                     rejected += 0 if ok else 1
                     continue
@@ -93,22 +103,23 @@ class AltcoinPaperMonitor:
                 signals = manager.generate(symbol, frame, market_state, current_side)
                 for signal in signals:
                     signals_created += 1
-                    ok, order_ids = self.execute_signal(signal, latest_row)
-                    fills_created += 1 if ok else 0
+                    ok, filled, order_ids = self.execute_signal(signal, latest_row)
+                    orders_created += 1 if ok else 0
+                    fills_created += 1 if filled else 0
                     exchange_order_ids.extend(order_ids)
                     rejected += 0 if ok else 1
             except Exception as exc:
                 self.log(f"symbol_error symbol={symbol} strategy={strategy_id}/{timeframe} error={exc}")
         self.save_portfolio()
-        self.write_latest(signals_created, fills_created, rejected, exchange_order_ids)
+        self.write_latest(signals_created, orders_created, fills_created, rejected, exchange_order_ids)
         self.log(
             f"{self.execution_mode}_summary equity={self.portfolio.equity:.2f} used_margin={self.portfolio.used_margin:.2f} "
             f"unrealized={self.portfolio.unrealized_pnl:.2f} realized={self.portfolio.realized_pnl:.2f} "
-            f"signals={signals_created} fills={fills_created} rejected={rejected} "
+            f"signals={signals_created} orders={orders_created} fills={fills_created} rejected={rejected} order_type={self.order_type} "
             f"exchange_order_ids={','.join(exchange_order_ids) or '-'} positions={self.format_positions()}"
         )
 
-    def execute_signal(self, signal: SignalEvent, latest_row: dict) -> tuple[bool, list[str]]:
+    def execute_signal(self, signal: SignalEvent, latest_row: dict) -> tuple[bool, bool, list[str]]:
         symbol_configs = {
             signal.symbol: {
                 "symbol": signal.symbol,
@@ -121,13 +132,27 @@ class AltcoinPaperMonitor:
         risk = risk_engine.check_signal(signal, latest_row)
         if not risk.approved:
             self.log(f"signal_rejected symbol={signal.symbol} signal={signal.signal_type.value} reason={risk.reason}")
-            return False, []
+            return False, False, []
         qty = risk_engine.order_quantity(signal)
         if qty <= 0:
             self.log(f"signal_rejected symbol={signal.symbol} signal={signal.signal_type.value} reason=no quantity")
-            return False, []
+            return False, False, []
         order = self.order_manager.create_order(signal, qty)
         submitted = self.order_manager.update_status(order.order_id, OrderStatus.SUBMITTED)
+        if isinstance(self.execution, BinanceTestnetExecution) and self.order_type == "limit":
+            response = self.execution.create_limit_order(
+                submitted,
+                leverage=self.leverage,
+                maker_offset=self.maker_offset,
+                post_only=True,
+            )
+            exchange_order_id = str(response.get("id") or response.get("orderId") or "")
+            self.log(
+                f"testnet_order symbol={submitted.symbol} action={submitted.position_action.value} type=limit "
+                f"side={submitted.side} qty={submitted.qty:.8f} signal_price={submitted.price:.6f} "
+                f"exchange_order_id={exchange_order_id or '-'} status=submitted post_only=YES"
+            )
+            return True, False, [exchange_order_id] if exchange_order_id else []
         if isinstance(self.execution, BinanceTestnetExecution):
             fill = self.execution.execute(submitted, leverage=self.leverage)
         else:
@@ -139,7 +164,7 @@ class AltcoinPaperMonitor:
             f"price={fill.fill_price:.6f} qty={fill.qty:.8f} fee={fill.fee:.4f} pnl={pnl:.4f} "
             f"exchange_order_id={fill.exchange_order_id or '-'}"
         )
-        return True, [fill.exchange_order_id] if fill.exchange_order_id else []
+        return True, True, [fill.exchange_order_id] if fill.exchange_order_id else []
 
     def stop_or_take_profit_signal(self, symbol: str, price: float) -> SignalEvent | None:
         pos = self.portfolio.get_position(symbol)
@@ -176,7 +201,14 @@ class AltcoinPaperMonitor:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.state_path.write_text(json.dumps(self.portfolio.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
 
-    def write_latest(self, signals_created: int, fills_created: int, rejected: int, exchange_order_ids: list[str]) -> None:
+    def write_latest(
+        self,
+        signals_created: int,
+        orders_created: int,
+        fills_created: int,
+        rejected: int,
+        exchange_order_ids: list[str],
+    ) -> None:
         payload = {
             "updated_at": datetime.now().isoformat(timespec="seconds"),
             "mode": self.execution_mode,
@@ -188,9 +220,11 @@ class AltcoinPaperMonitor:
             "unrealized_pnl": self.portfolio.unrealized_pnl,
             "max_drawdown": self.portfolio.max_drawdown,
             "signals_created": signals_created,
+            "orders_created": orders_created,
             "fills_created": fills_created,
             "rejected": rejected,
             "exchange_order_ids": exchange_order_ids,
+            "order_type": self.order_type,
             "fee_rate": FEE_RATE,
             "positions": self.portfolio.to_dict()["positions"],
         }
@@ -227,6 +261,8 @@ def main() -> None:
     parser.add_argument("--take-profit-pct", type=float, default=0.06, help="take profit percentage")
     parser.add_argument("--execution-mode", choices=["paper", "testnet"], default="paper", help="paper or Binance testnet execution")
     parser.add_argument("--confirm-exchange-orders", default="", help="set to YES to allow testnet exchange orders")
+    parser.add_argument("--order-type", choices=["market", "limit"], default="market", help="market or post-only limit orders")
+    parser.add_argument("--maker-offset", type=float, default=0.001, help="limit maker offset, e.g. 0.001 = 0.1%% from signal price")
     args = parser.parse_args()
 
     monitor = AltcoinPaperMonitor(
@@ -238,6 +274,8 @@ def main() -> None:
         take_profit_pct=args.take_profit_pct,
         execution_mode=args.execution_mode,
         confirm_exchange_orders=args.confirm_exchange_orders,
+        order_type=args.order_type,
+        maker_offset=args.maker_offset,
     )
     if args.run_once:
         monitor.run_once()

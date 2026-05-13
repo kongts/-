@@ -115,6 +115,39 @@ class BinanceTestnetExecution:
             timestamp=order.timestamp,
         )
 
+    def create_limit_order(
+        self,
+        order: OrderEvent,
+        leverage: int | None = None,
+        maker_offset: float = 0.001,
+        post_only: bool = True,
+    ) -> dict:
+        if leverage is not None:
+            self.set_leverage_once(order.symbol, leverage)
+        amount = float(self.exchange.amount_to_precision(order.symbol, order.qty))
+        price = self._limit_price(order, maker_offset)
+        params = {}
+        if order.reduce_only:
+            params["reduceOnly"] = True
+        if post_only:
+            params["timeInForce"] = "GTX"
+        return self.exchange.create_order(
+            symbol=order.symbol,
+            type="limit",
+            side=order.side.lower(),
+            amount=amount,
+            price=price,
+            params=params,
+        )
+
+    def _limit_price(self, order: OrderEvent, maker_offset: float) -> float:
+        raw_price = order.price
+        if order.side.upper() == "BUY":
+            raw_price = order.price * (1 - maker_offset)
+        elif order.side.upper() == "SELL":
+            raw_price = order.price * (1 + maker_offset)
+        return float(self.exchange.price_to_precision(order.symbol, raw_price))
+
     def _extract_fill_price(self, response: dict, fallback_price: float) -> float:
         for key in ("average", "price"):
             value = response.get(key)
