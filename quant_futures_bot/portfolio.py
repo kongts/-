@@ -121,12 +121,26 @@ class Portfolio:
             self.max_drawdown = max(self.max_drawdown, (self.peak_equity - self.equity) / self.peak_equity)
 
     def sync_from_exchange(self, account: dict) -> None:
+        synced_equity = float(account.get("equity", self.equity))
+        fresh_default_state = (
+            abs(self.cash - INITIAL_CASH) < 1e-9
+            and abs(self.equity - INITIAL_CASH) < 1e-9
+            and abs(self.peak_equity - INITIAL_CASH) < 1e-9
+            and self.max_drawdown == 0.0
+            and self.realized_pnl == 0.0
+            and self.daily_pnl == 0.0
+            and not self.closed_trade_pnls
+        )
         self.cash = float(account.get("cash", self.cash))
-        self.equity = float(account.get("equity", self.equity))
+        self.equity = synced_equity
         self.available_balance = float(account.get("available_balance", self.available_balance))
         self.used_margin = float(account.get("used_margin", self.used_margin))
         self.unrealized_pnl = float(account.get("unrealized_pnl", self.unrealized_pnl))
-        self.peak_equity = max(self.peak_equity, self.equity)
+        if fresh_default_state and self.equity > 0:
+            self.peak_equity = self.equity
+            self.max_drawdown = 0.0
+        else:
+            self.peak_equity = max(self.peak_equity, self.equity)
         if self.peak_equity > 0:
             self.max_drawdown = max(self.max_drawdown, (self.peak_equity - self.equity) / self.peak_equity)
         exchange_positions = account.get("positions", {})
