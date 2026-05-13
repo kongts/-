@@ -98,7 +98,7 @@ sudo systemctl enable --now quant-websocket.service
 sudo systemctl enable --now quant-optimizer.timer
 ```
 
-启动每 30 分钟山寨币激进策略滚动回测：
+启动每 1 小时山寨币激进策略滚动回测：
 
 ```bash
 sudo systemctl enable --now quant-altcoin-optimizer.timer

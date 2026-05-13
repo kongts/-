@@ -5,4 +5,4 @@ if not exist "%PYTHON_EXE%" (
   echo Please install Python 3.11+ or update PYTHON_EXE in this file.
   exit /b 1
 )
-"%PYTHON_EXE%" -m quant_futures_bot.auto_altcoin_optimizer --interval-minutes 30 --run-once-first
+"%PYTHON_EXE%" -m quant_futures_bot.auto_altcoin_optimizer --interval-minutes 60 --run-once-first
