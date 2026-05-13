@@ -1,45 +1,23 @@
 # Ubuntu 云服务器部署
 
-以下命令默认项目部署到：
+默认部署目录：
 
 ```bash
 /opt/quant-futures-bot
 ```
 
-## 1. 拉取项目
+## 1. 更新项目
 
 ```bash
-sudo mkdir -p /opt/quant-futures-bot
-sudo chown "$USER":"$USER" /opt/quant-futures-bot
-git clone https://github.com/kongts/-.git /opt/quant-futures-bot
 cd /opt/quant-futures-bot
+git pull
+/opt/miniconda/envs/quant-bot/bin/pip install -r requirements.txt
 ```
 
-## 2. 安装 Python 环境
-
-如果服务器使用 conda：
+## 2. 配置 `.env`
 
 ```bash
-source /opt/miniconda/etc/profile.d/conda.sh
-conda create -n quant-bot python=3.11 -y
-conda activate quant-bot
-pip install -r requirements.txt
-```
-
-如果使用 venv：
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-## 3. 配置 Testnet API
-
-不要把真实 key 提交到 Git。服务器上创建 `.env`：
-
-```bash
+cd /opt/quant-futures-bot
 cp deploy/env.example .env
 nano .env
 ```
@@ -52,16 +30,23 @@ BINANCE_TESTNET_API_KEY=你的testnet_key
 BINANCE_TESTNET_API_SECRET=你的testnet_secret
 ```
 
-## 4. 测试 Binance 网络
+## 3. 测试网络
+
+Binance：
 
 ```bash
 curl https://testnet.binancefuture.com/fapi/v1/time
 curl https://fapi.binance.com/fapi/v1/time
 ```
 
-能返回 `serverTime` 再继续。
+OKX：
 
-## 5. 手动测试
+```bash
+curl -s https://www.okx.com/api/v5/public/time
+curl -s "https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT-SWAP"
+```
+
+## 4. 手动测试
 
 ```bash
 cd /opt/quant-futures-bot
@@ -71,11 +56,12 @@ set -a; source .env; set +a
 
 python -m quant_futures_bot.strategy_optimizer
 python -m quant_futures_bot.websocket_monitor --print-seconds 5
+python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 20 --limit 300 --show 10
 ```
 
-看到 `websocket_tick` 说明实时行情已接通。看到 `execution_mode=testnet` 说明 Testnet 配置已生效。
+看到 `websocket_tick` 说明 WebSocket 行情正常。看到 `altcoin top-volume aggressive strategy backtest` 说明山寨币策略回测正常。
 
-## 6. 安装 systemd 服务
+## 5. 安装 systemd 服务
 
 ```bash
 sudo cp deploy/quant-websocket.service /etc/systemd/system/quant-websocket.service
@@ -86,41 +72,46 @@ sudo cp deploy/quant-altcoin-optimizer.timer /etc/systemd/system/quant-altcoin-o
 sudo systemctl daemon-reload
 ```
 
-启动 WebSocket 盯盘：
+## 6. 启动服务
 
 ```bash
 sudo systemctl enable --now quant-websocket.service
-```
-
-启动每 4 小时自动优化：
-
-```bash
 sudo systemctl enable --now quant-optimizer.timer
-```
-
-启动每 1 小时山寨币激进策略滚动回测：
-
-```bash
 sudo systemctl enable --now quant-altcoin-optimizer.timer
 ```
 
-## 7. 查看状态和日志
+## 7. 查看日志
+
+主交易 WebSocket：
 
 ```bash
-sudo systemctl status quant-websocket.service
-sudo systemctl status quant-optimizer.timer
-sudo systemctl status quant-altcoin-optimizer.timer
 journalctl -u quant-websocket.service -f
 ```
 
-查看优化器日志：
+BTC/ETH/SOL 主策略优化：
 
 ```bash
 journalctl -u quant-optimizer.service -n 100
-journalctl -u quant-altcoin-optimizer.service -n 100
 ```
 
-## 8. 停止服务
+山寨币激进策略：
+
+```bash
+journalctl -u quant-altcoin-optimizer.service -n 100
+tail -f /opt/quant-futures-bot/quant_futures_bot/logs/altcoin_strategy.log
+cat /opt/quant-futures-bot/quant_futures_bot/data/altcoin_strategy_latest.json
+```
+
+## 8. 查看 timer
+
+```bash
+systemctl list-timers | grep quant
+sudo systemctl status quant-altcoin-optimizer.timer
+```
+
+`quant-altcoin-optimizer.timer` 每 1 小时运行一次。
+
+## 9. 停止服务
 
 ```bash
 sudo systemctl stop quant-websocket.service
@@ -128,12 +119,25 @@ sudo systemctl stop quant-optimizer.timer
 sudo systemctl stop quant-altcoin-optimizer.timer
 ```
 
-## 9. 更新项目
+## 10. 常见问题
+
+如果 `git pull` 被本地改动挡住，先看：
 
 ```bash
-cd /opt/quant-futures-bot
+git status
+```
+
+如果只是部署模板文件被改过，并且不需要保留：
+
+```bash
+git restore deploy/quant-optimizer.service
 git pull
-/opt/miniconda/envs/quant-bot/bin/pip install -r requirements.txt
-sudo systemctl restart quant-websocket.service
-sudo systemctl restart quant-altcoin-optimizer.timer
+```
+
+如果 systemd 找不到新服务，重新复制并 reload：
+
+```bash
+sudo cp deploy/quant-altcoin-optimizer.service /etc/systemd/system/quant-altcoin-optimizer.service
+sudo cp deploy/quant-altcoin-optimizer.timer /etc/systemd/system/quant-altcoin-optimizer.timer
+sudo systemctl daemon-reload
 ```

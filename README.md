@@ -1,165 +1,215 @@
 # Quant Futures Bot
 
-这是一个用于 Binance USDT 合约测试盘的量化交易项目。当前主运行方式是：
+这是一个运行在 Binance Futures Testnet/Demo 上的量化交易项目。当前最新使用方式是：
 
-- WebSocket 实时盯盘价格
-- 4H/6H 周期换线时执行策略判断
-- Testnet/Demo 账户下单，不动真实资金
-- 每个币种可以使用优化器筛选出的独立策略和周期
+- `quant-websocket.service`：WebSocket 实时盯盘、同步测试盘账户、执行当前主策略。
+- `quant-optimizer.timer`：每 4 小时优化 BTC/ETH/SOL 的主策略。
+- `quant-altcoin-optimizer.timer`：每 1 小时滚动回测山寨币激进策略，输出排名和日志。
 
-## 安装
+测试盘会真实向 Binance Futures Testnet/Demo 发订单，但不会动真实资金。
 
-```bat
+## 1. 安装依赖
+
+```bash
 pip install -r requirements.txt
 ```
 
-## 回测和策略优化
+## 2. 配置 Testnet API
 
-在线拉取 Binance Futures 历史 K 线回测：
-
-```bat
-run_backtest.bat
-```
-
-按币种筛选最优策略：
-
-```bat
-optimize_strategy.bat
-```
-
-优化器会测试 BTC、ETH、SOL 的候选策略，并把结果写入：
-
-```text
-quant_futures_bot/data/selected_strategy.json
-```
-
-当前只使用 `4h` 和 `6h` 周期。
-
-## 山寨币前 100 激进策略回测
-
-抓取 Binance USDT 永续合约 24h 成交额排名前 100 的山寨币，并测试激进策略：
-
-```bat
-run_altcoin_top100_backtest.bat
-```
-
-默认设置：
-
-- 排除 BTC、ETH、稳定币、黄金、白银、天然气和股票映射类合约
-- 周期：`15m`、`30m`
-- 策略：短周期动量突破、成交量放大突破、波动率扩张突破
-- 止损：`2.5%`
-- 止盈：`6%`
-- 单币保证金占比：`3%`
-- 杠杆：`2x`
-
-输出文件：
-
-```text
-quant_futures_bot/data/altcoin_top100_backtest.csv
-```
-
-也可以直接运行模块调整参数：
-
-```bash
-python -m quant_futures_bot.altcoin_top_volume_backtest --top 100 --limit 500 --timeframes 15m,30m --show 30
-```
-
-如果要每 1 小时滚动更新山寨币激进策略回测：
-
-```bat
-auto_altcoin_optimize_every_1h.bat
-```
-
-服务器上推荐使用 `quant-altcoin-optimizer.timer`，每 1 小时运行一次，输出到：
-
-```text
-quant_futures_bot/data/altcoin_top100_rolling_backtest.csv
-```
-
-## 单次运行
-
-本地 paper 模式单次运行：
-
-```bat
-run_live_once.bat
-```
-
-Binance Futures Testnet 单次运行：
-
-```bat
-run_testnet_once.bat
-```
-
-Testnet 运行前需要设置环境变量：
+Windows 临时设置：
 
 ```bat
 set BINANCE_TESTNET_API_KEY=你的testnet_api_key
 set BINANCE_TESTNET_API_SECRET=你的testnet_api_secret
 ```
 
-## WebSocket 实时盯盘
+Linux 服务器使用 `.env`：
 
-持续盯盘只保留 WebSocket 版本：
+```bash
+EXECUTION_MODE=testnet
+BINANCE_TESTNET_API_KEY=你的testnet_key
+BINANCE_TESTNET_API_SECRET=你的testnet_secret
+```
+
+不要把真实 key 提交到 Git。
+
+## 3. WebSocket 实时盯盘
+
+本地运行：
 
 ```bat
 run_testnet_websocket.bat
 ```
 
-它会连接 Binance Futures WebSocket：
+服务器长期运行：
 
-- `bookTicker`：实时接收买一卖一价格，默认每 5 秒打印一次价格心跳
-- `strategy_timer`：根据当前策略周期判断 4H/6H 是否换线
-- 启动时执行一轮策略，用来同步账户权益、持仓、挂单
-- 4H/6H 换线时执行一轮策略判断和下单
-
-常见日志：
-
-```text
-websocket_tick prices=BTC/USDT:USDT=81078.5500,ETH/USDT:USDT=2314.1850,SOL/USDT:USDT=95.3350 equity=10000.00 status=RUNNING exchange_positions=-
-timeframe_closed interval=4h
-strategy_cycle reason="4h close"
-cycle=2 equity=9998.20 used_margin=600.30 status=RUNNING execution_mode=testnet signals=0 rejected=0 orders_created=0 fills_created=0
+```bash
+sudo systemctl enable --now quant-websocket.service
+journalctl -u quant-websocket.service -f
 ```
 
-字段含义：
-
-- `websocket_tick`：实时价格心跳
-- `timeframe_closed`：4H/6H 周期换线
-- `strategy_cycle`：执行了一轮策略
-- `signals`：本轮产生的策略信号数
-- `rejected`：本轮被风控拒绝或无可用数量的信号数
-- `orders_created`：本轮生成订单数
-- `fills_created`：本轮成交数
-- `exchange_positions`：从 Binance Testnet 同步到的真实测试盘持仓摘要
-
-## 数据文件
-
-运行后会生成：
+日志含义：
 
 ```text
-quant_futures_bot/data/quant_bot.db
+websocket_tick
+```
+
+实时价格心跳，说明 WebSocket 行情正常。
+
+```text
+strategy_cycle
+```
+
+启动或 4H/6H 周期换线后执行了一轮主策略。
+
+```text
+signals / rejected / orders_created / fills_created
+```
+
+分别表示策略信号数、风控拒绝数、创建订单数、成交数。
+
+## 4. 主策略优化
+
+手动优化 BTC/ETH/SOL：
+
+```bat
+optimize_strategy.bat
+```
+
+服务器自动优化：
+
+```bash
+sudo systemctl enable --now quant-optimizer.timer
+journalctl -u quant-optimizer.service -n 100
+```
+
+主策略优化结果写入：
+
+```text
+quant_futures_bot/data/selected_strategy.json
+```
+
+当前主策略只使用 `4h` 和 `6h` 周期。
+
+## 5. 山寨币激进策略
+
+山寨币激进策略用于扫描 Binance USDT 永续合约成交额前 100 的山寨币，测试：
+
+- 短周期动量突破：`alt_momentum_12`
+- 成交量放大突破：`alt_volume_breakout`
+- 波动率扩张突破：`alt_volatility_breakout`
+
+默认参数：
+
+- 回测周期：`15m,30m`
+- 每周期 K 线数量：`--limit 500`
+- 止损：`2.5%`
+- 止盈：`6%`
+- 杠杆：`2x`
+- 单币保证金占比：`3%`
+- 自动更新频率：每 1 小时
+
+手动运行一次：
+
+```bash
+python -m quant_futures_bot.altcoin_top_volume_backtest --top 100 --limit 500 --timeframes 15m,30m --show 30
+```
+
+Windows 每 1 小时滚动运行：
+
+```bat
+auto_altcoin_optimize_every_1h.bat
+```
+
+服务器每 1 小时自动运行：
+
+```bash
+sudo systemctl enable --now quant-altcoin-optimizer.timer
+```
+
+查看山寨币策略运行日志：
+
+```bash
+journalctl -u quant-altcoin-optimizer.service -n 100
+tail -f quant_futures_bot/logs/altcoin_strategy.log
+```
+
+查看最新山寨币策略排名摘要：
+
+```bash
+cat quant_futures_bot/data/altcoin_strategy_latest.json
+```
+
+完整 CSV 结果：
+
+```text
+quant_futures_bot/data/altcoin_top100_rolling_backtest.csv
+```
+
+注意：目前山寨币激进策略默认只做滚动回测和排名输出，不会自动接管实盘/测试盘下单。主交易仍由 `quant-websocket.service` 的当前主策略执行。
+
+## 6. 数据文件
+
+常用文件：
+
+```text
 quant_futures_bot/data/state.json
 quant_futures_bot/data/selected_strategy.json
+quant_futures_bot/data/altcoin_strategy_latest.json
+quant_futures_bot/data/altcoin_top100_rolling_backtest.csv
 quant_futures_bot/logs/error.log
+quant_futures_bot/logs/altcoin_strategy.log
 ```
 
-`state.json` 可以直接打开查看当前账户状态、持仓、系统状态、最大回撤、连续亏损次数等。
+`state.json` 可以查看当前账户权益、持仓、系统状态、最大回撤、连续亏损次数。
 
-## 云服务器部署
+## 7. 云服务器部署
 
-Ubuntu 部署说明见：
+完整 Ubuntu 部署说明：
 
 ```text
 deploy/README_ubuntu.md
 ```
 
-长期运行推荐：
+常用更新命令：
 
-- `quant-websocket.service`：WebSocket 实时盯盘和策略执行
-- `quant-optimizer.timer`：每 4 小时自动回测优化策略
-- `quant-altcoin-optimizer.timer`：每 1 小时滚动回测山寨币激进策略
+```bash
+cd /opt/quant-futures-bot
+git pull
+/opt/miniconda/envs/quant-bot/bin/pip install -r requirements.txt
 
-## 安全提醒
+sudo cp deploy/quant-websocket.service /etc/systemd/system/quant-websocket.service
+sudo cp deploy/quant-optimizer.service /etc/systemd/system/quant-optimizer.service
+sudo cp deploy/quant-optimizer.timer /etc/systemd/system/quant-optimizer.timer
+sudo cp deploy/quant-altcoin-optimizer.service /etc/systemd/system/quant-altcoin-optimizer.service
+sudo cp deploy/quant-altcoin-optimizer.timer /etc/systemd/system/quant-altcoin-optimizer.timer
+sudo systemctl daemon-reload
+```
 
-不要把真实 API key 提交到 Git。`.env`、数据库、状态文件和日志都不应该提交。
+启动所有服务：
+
+```bash
+sudo systemctl enable --now quant-websocket.service
+sudo systemctl enable --now quant-optimizer.timer
+sudo systemctl enable --now quant-altcoin-optimizer.timer
+```
+
+查看服务：
+
+```bash
+sudo systemctl status quant-websocket.service
+sudo systemctl status quant-optimizer.timer
+sudo systemctl status quant-altcoin-optimizer.timer
+```
+
+停止服务：
+
+```bash
+sudo systemctl stop quant-websocket.service
+sudo systemctl stop quant-optimizer.timer
+sudo systemctl stop quant-altcoin-optimizer.timer
+```
+
+## 8. 安全提醒
+
+`.env`、数据库、状态文件、CSV 结果和日志都不应提交到 Git。项目已在 `.gitignore` 中排除这些运行时文件。
