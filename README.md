@@ -65,6 +65,18 @@ quant_futures_bot/data/altcoin_top100_backtest.csv
 python -m quant_futures_bot.altcoin_top_volume_backtest --top 100 --limit 500 --timeframes 15m,30m --show 30
 ```
 
+如果要每 30 分钟滚动更新山寨币激进策略回测：
+
+```bat
+auto_altcoin_optimize_every_30m.bat
+```
+
+服务器上推荐使用 `quant-altcoin-optimizer.timer`，每 30 分钟运行一次，输出到：
+
+```text
+quant_futures_bot/data/altcoin_top100_rolling_backtest.csv
+```
+
 ## 单次运行
 
 本地 paper 模式单次运行：
@@ -146,6 +158,7 @@ deploy/README_ubuntu.md
 
 - `quant-websocket.service`：WebSocket 实时盯盘和策略执行
 - `quant-optimizer.timer`：每 4 小时自动回测优化策略
+- `quant-altcoin-optimizer.timer`：每 30 分钟滚动回测山寨币激进策略
 
 ## 安全提醒
 

@@ -81,6 +81,8 @@ python -m quant_futures_bot.websocket_monitor --print-seconds 5
 sudo cp deploy/quant-websocket.service /etc/systemd/system/quant-websocket.service
 sudo cp deploy/quant-optimizer.service /etc/systemd/system/quant-optimizer.service
 sudo cp deploy/quant-optimizer.timer /etc/systemd/system/quant-optimizer.timer
+sudo cp deploy/quant-altcoin-optimizer.service /etc/systemd/system/quant-altcoin-optimizer.service
+sudo cp deploy/quant-altcoin-optimizer.timer /etc/systemd/system/quant-altcoin-optimizer.timer
 sudo systemctl daemon-reload
 ```
 
@@ -96,11 +98,18 @@ sudo systemctl enable --now quant-websocket.service
 sudo systemctl enable --now quant-optimizer.timer
 ```
 
+启动每 30 分钟山寨币激进策略滚动回测：
+
+```bash
+sudo systemctl enable --now quant-altcoin-optimizer.timer
+```
+
 ## 7. 查看状态和日志
 
 ```bash
 sudo systemctl status quant-websocket.service
 sudo systemctl status quant-optimizer.timer
+sudo systemctl status quant-altcoin-optimizer.timer
 journalctl -u quant-websocket.service -f
 ```
 
@@ -108,6 +117,7 @@ journalctl -u quant-websocket.service -f
 
 ```bash
 journalctl -u quant-optimizer.service -n 100
+journalctl -u quant-altcoin-optimizer.service -n 100
 ```
 
 ## 8. 停止服务
@@ -115,6 +125,7 @@ journalctl -u quant-optimizer.service -n 100
 ```bash
 sudo systemctl stop quant-websocket.service
 sudo systemctl stop quant-optimizer.timer
+sudo systemctl stop quant-altcoin-optimizer.timer
 ```
 
 ## 9. 更新项目
@@ -124,4 +135,5 @@ cd /opt/quant-futures-bot
 git pull
 /opt/miniconda/envs/quant-bot/bin/pip install -r requirements.txt
 sudo systemctl restart quant-websocket.service
+sudo systemctl restart quant-altcoin-optimizer.timer
 ```

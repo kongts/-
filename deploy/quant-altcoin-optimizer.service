@@ -1,0 +1,10 @@
+[Unit]
+Description=Quant Futures Altcoin Aggressive Rolling Backtest
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/quant-futures-bot
+EnvironmentFile=/opt/quant-futures-bot/.env
+ExecStart=/opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 100 --limit 500 --timeframes 15m,30m --show 30 --output quant_futures_bot/data/altcoin_top100_rolling_backtest.csv
