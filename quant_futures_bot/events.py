@@ -123,6 +123,7 @@ class FillEvent(Event):
     fee: float = 0.0
     slippage: float = 0.0
     position_action: SignalType = SignalType.CLOSE_POSITION
+    exchange_order_id: str = ""
 
     def __init__(
         self,
@@ -133,6 +134,7 @@ class FillEvent(Event):
         fee: float,
         slippage: float,
         position_action: SignalType,
+        exchange_order_id: str = "",
         timestamp: datetime | None = None,
     ):
         object.__setattr__(self, "type", EventType.FILL)
@@ -144,6 +146,7 @@ class FillEvent(Event):
         object.__setattr__(self, "fee", fee)
         object.__setattr__(self, "slippage", slippage)
         object.__setattr__(self, "position_action", position_action)
+        object.__setattr__(self, "exchange_order_id", exchange_order_id)
 
 
 @dataclass(frozen=True)
@@ -184,4 +187,3 @@ class ErrorEvent(Event):
         object.__setattr__(self, "timestamp", utc_now())
         object.__setattr__(self, "source", source)
         object.__setattr__(self, "message", message)
-

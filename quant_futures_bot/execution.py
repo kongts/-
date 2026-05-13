@@ -22,6 +22,7 @@ class PaperExecution:
             fee=fee,
             slippage=slippage,
             position_action=order.position_action,
+            exchange_order_id="",
             timestamp=order.timestamp,
         )
 
@@ -36,3 +37,89 @@ class PaperExecution:
             return price * (1 + self.slippage_rate)
         return price
 
+
+class BinanceTestnetExecution:
+    def __init__(self, fee_rate: float = config.FEE_RATE) -> None:
+        if not config.BINANCE_TESTNET_API_KEY or not config.BINANCE_TESTNET_API_SECRET:
+            raise RuntimeError(
+                "Missing BINANCE_TESTNET_API_KEY or BINANCE_TESTNET_API_SECRET environment variable"
+            )
+        try:
+            import ccxt
+        except ImportError as exc:
+            raise RuntimeError("ccxt is required for Binance testnet execution") from exc
+
+        self.fee_rate = fee_rate
+        self.exchange = ccxt.binanceusdm(
+            {
+                "apiKey": config.BINANCE_TESTNET_API_KEY,
+                "secret": config.BINANCE_TESTNET_API_SECRET,
+                "enableRateLimit": True,
+                "options": {"defaultType": "future"},
+            }
+        )
+        self.exchange.set_sandbox_mode(True)
+        self.exchange.load_markets()
+        self._configured_leverage: set[str] = set()
+
+    def set_leverage_once(self, symbol: str, leverage: int) -> None:
+        if symbol in self._configured_leverage:
+            return
+        self.exchange.set_leverage(leverage, symbol)
+        self._configured_leverage.add(symbol)
+
+    def execute(self, order: OrderEvent, leverage: int | None = None) -> FillEvent:
+        if leverage is not None:
+            self.set_leverage_once(order.symbol, leverage)
+        amount = float(self.exchange.amount_to_precision(order.symbol, order.qty))
+        params = {}
+        if order.reduce_only:
+            params["reduceOnly"] = True
+        response = self.exchange.create_order(
+            symbol=order.symbol,
+            type="market",
+            side=order.side.lower(),
+            amount=amount,
+            price=None,
+            params=params,
+        )
+        fill_price = self._extract_fill_price(response, order.price)
+        filled_qty = float(response.get("filled") or amount)
+        fee = self._extract_fee(response, fill_price * filled_qty)
+        slippage = abs(fill_price - order.price)
+        return FillEvent(
+            order_id=order.order_id,
+            symbol=order.symbol,
+            fill_price=fill_price,
+            qty=filled_qty,
+            fee=fee,
+            slippage=slippage,
+            position_action=order.position_action,
+            exchange_order_id=str(response.get("id") or response.get("orderId") or ""),
+            timestamp=order.timestamp,
+        )
+
+    def _extract_fill_price(self, response: dict, fallback_price: float) -> float:
+        for key in ("average", "price"):
+            value = response.get(key)
+            if value:
+                return float(value)
+        return float(fallback_price)
+
+    def _extract_fee(self, response: dict, fallback_notional: float) -> float:
+        fee = response.get("fee") or {}
+        cost = fee.get("cost")
+        if cost is not None:
+            return abs(float(cost))
+        fees = response.get("fees") or []
+        if fees:
+            return sum(abs(float(item.get("cost", 0))) for item in fees)
+        return fallback_notional * self.fee_rate
+
+
+def create_execution():
+    if config.EXECUTION_MODE == "testnet":
+        return BinanceTestnetExecution()
+    if config.EXECUTION_MODE != "paper":
+        raise RuntimeError(f"Unsupported EXECUTION_MODE: {config.EXECUTION_MODE}")
+    return PaperExecution()

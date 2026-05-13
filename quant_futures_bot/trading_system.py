@@ -4,7 +4,7 @@ from .database import Database
 from .data import MarketDataProvider
 from .events import ErrorEvent, EventType, FillEvent, MarketEvent, OrderStatus, PauseEvent, SignalEvent
 from .event_engine import EventEngine
-from .execution import PaperExecution
+from .execution import BinanceTestnetExecution, create_execution
 from .indicators import add_indicators
 from .logger import setup_logger
 from .market_state import detect_market_state
@@ -23,11 +23,22 @@ class TradingSystem:
         self.database = Database()
         self.data_provider = MarketDataProvider(use_exchange=use_exchange)
         self.strategy_manager = StrategyManager()
+        self.selected_strategy = {
+            "strategy_id": self.strategy_manager.strategy_id,
+            "strategy_name": self.strategy_manager.strategy_name,
+            "per_symbol": self.strategy_manager.selected_payload.get("per_symbol", {}),
+        }
         self.order_manager = OrderManager()
-        self.execution = PaperExecution()
+        self.execution = create_execution()
         self.risk_engine = RiskEngine(self.portfolio, self.pause_manager)
         self.engine = EventEngine()
         self.latest_rows: dict[str, dict] = {}
+        self.last_data_sources: dict[str, str] = {}
+        self.cycle_orders_created = 0
+        self.cycle_fills_created = 0
+        self.cycle_signals_created = 0
+        self.cycle_signals_rejected = 0
+        self.cycle_exchange_order_ids: list[str] = []
         self._register_handlers()
 
     def _register_handlers(self) -> None:
@@ -38,10 +49,18 @@ class TradingSystem:
         self.engine.register(EventType.ERROR, self.on_error)
 
     def run_cycle(self) -> None:
+        self.strategy_manager = StrategyManager()
+        self.cycle_orders_created = 0
+        self.cycle_fills_created = 0
+        self.cycle_signals_created = 0
+        self.cycle_signals_rejected = 0
+        self.cycle_exchange_order_ids = []
         for item in enabled_symbols():
             symbol = item["symbol"]
             try:
-                df = self.data_provider.fetch_ohlcv(symbol)
+                timeframe = self.strategy_manager.timeframe_for_symbol(symbol)
+                df = self.data_provider.fetch_ohlcv(symbol, timeframe=timeframe)
+                self.last_data_sources[symbol] = self.data_provider.last_source_by_symbol.get(symbol, "unknown")
                 df = add_indicators(df)
                 price = float(df.iloc[-1]["close"])
                 self.engine.put(MarketEvent(symbol=symbol, price=price, dataframe=df))
@@ -57,7 +76,8 @@ class TradingSystem:
 
     def on_market(self, event) -> None:
         assert isinstance(event, MarketEvent)
-        self.database.save_market_data(event.symbol, event.dataframe)
+        source = self.last_data_sources.get(event.symbol, "unknown")
+        self.database.save_market_data(event.symbol, event.dataframe, source)
         self.portfolio.update_market_price(event.symbol, event.price)
         latest = event.dataframe.iloc[-1].to_dict()
         self.latest_rows[event.symbol] = latest
@@ -68,20 +88,28 @@ class TradingSystem:
 
     def on_signal(self, event) -> None:
         assert isinstance(event, SignalEvent)
+        self.cycle_signals_created += 1
         self.database.save_signal(event)
         risk = self.risk_engine.check_signal(event, self.latest_rows.get(event.symbol, {}))
         if not risk.approved:
+            self.cycle_signals_rejected += 1
             self.logger.info("Signal rejected for %s: %s", event.symbol, risk.reason)
             return
         qty = self.risk_engine.order_quantity(event)
         if qty <= 0:
+            self.cycle_signals_rejected += 1
             self.logger.info("No quantity available for %s %s", event.symbol, event.signal_type.value)
             return
         order = self.order_manager.create_order(event, qty)
+        self.cycle_orders_created += 1
         self.database.save_order(order)
         submitted = self.order_manager.update_status(order.order_id, OrderStatus.SUBMITTED)
         self.database.save_order(submitted)
-        fill = self.execution.execute(submitted)
+        leverage = int(get_symbol_config(event.symbol)["leverage"])
+        if isinstance(self.execution, BinanceTestnetExecution):
+            fill = self.execution.execute(submitted, leverage=leverage)
+        else:
+            fill = self.execution.execute(submitted)
         filled = self.order_manager.update_status(order.order_id, OrderStatus.FILLED)
         self.database.save_order(filled)
         self.engine.put(fill)
@@ -90,6 +118,9 @@ class TradingSystem:
         assert isinstance(event, FillEvent)
         leverage = float(get_symbol_config(event.symbol)["leverage"])
         pnl = self.portfolio.apply_fill(event, leverage=leverage)
+        self.cycle_fills_created += 1
+        if event.exchange_order_id:
+            self.cycle_exchange_order_ids.append(event.exchange_order_id)
         self.database.save_fill(event)
         self.database.save_trade(event.timestamp.isoformat(), event.symbol, pnl)
         self.database.save_portfolio(self.portfolio)
@@ -104,4 +135,3 @@ class TradingSystem:
         self.pause_manager.record_api_error()
         self.database.save_error(event)
         self.logger.error("%s: %s", event.source, event.message)
-

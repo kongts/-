@@ -21,6 +21,8 @@ from .symbol_config import enabled_symbols, get_symbol_config
 
 @dataclass
 class BacktestResult:
+    strategy_id: str
+    strategy_name: str
     final_equity: float
     return_pct: float
     max_drawdown: float
@@ -32,13 +34,22 @@ class BacktestResult:
     profit_factor: float
     max_consecutive_losses: int
     pause_count: int
+    data_sources: dict[str, str]
     equity_curve: list[float]
 
 
 class Backtester:
-    def __init__(self, offline: bool = True) -> None:
-        self.data_provider = MarketDataProvider(use_exchange=not offline)
-        self.strategy_manager = StrategyManager()
+    def __init__(
+        self,
+        offline: bool = False,
+        strategy_id: str | None = None,
+        frames: dict[str, pd.DataFrame] | None = None,
+        data_sources: dict[str, str] | None = None,
+    ) -> None:
+        self.data_provider = MarketDataProvider(use_exchange=not offline, fallback_to_synthetic=offline)
+        self.strategy_manager = StrategyManager(strategy_id=strategy_id, use_saved_selection=strategy_id is None)
+        self.frames = frames
+        self.data_sources = data_sources or {}
         self.order_manager = OrderManager()
         self.execution = PaperExecution()
         self.portfolio = Portfolio()
@@ -50,10 +61,7 @@ class Backtester:
         self.equity_curve: list[float] = []
 
     def run(self) -> BacktestResult:
-        frames = {
-            item["symbol"]: add_indicators(self.data_provider.fetch_ohlcv(item["symbol"], limit=250))
-            for item in enabled_symbols()
-        }
+        frames = self.frames or self.load_frames()
         min_len = min(len(df) for df in frames.values())
         for idx in range(40, min_len):
             latest_rows = {}
@@ -86,6 +94,14 @@ class Backtester:
             self.equity_curve.append(self.portfolio.equity)
         return self._result()
 
+    def load_frames(self, limit: int = 500) -> dict[str, pd.DataFrame]:
+        frames = {}
+        for item in enabled_symbols():
+            symbol = item["symbol"]
+            frames[symbol] = add_indicators(self.data_provider.fetch_ohlcv(symbol, limit=limit))
+        self.data_sources = dict(self.data_provider.last_source_by_symbol)
+        return frames
+
     def _result(self) -> BacktestResult:
         pnls = self.trade_pnls
         wins = [pnl for pnl in pnls if pnl > 0]
@@ -96,6 +112,8 @@ class Backtester:
         long_pnls = [p for p, side in zip(pnls, self.trade_sides) if side == "LONG"]
         short_pnls = [p for p, side in zip(pnls, self.trade_sides) if side == "SHORT"]
         return BacktestResult(
+            strategy_id=self.strategy_manager.strategy_id,
+            strategy_name=self.strategy_manager.strategy_name,
             final_equity=self.portfolio.equity,
             return_pct=(self.portfolio.equity / 10_000.0 - 1) * 100,
             max_drawdown=self.portfolio.max_drawdown,
@@ -107,6 +125,7 @@ class Backtester:
             profit_factor=profit_factor,
             max_consecutive_losses=self._max_consecutive_losses(pnls),
             pause_count=self.pause_count,
+            data_sources=self.data_sources or dict(self.data_provider.last_source_by_symbol),
             equity_curve=self.equity_curve,
         )
 
@@ -130,9 +149,11 @@ class Backtester:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run paper trading backtest")
-    parser.add_argument("--live-data", action="store_true", help="pull exchange data instead of synthetic data")
+    parser.add_argument("--offline", action="store_true", help="use synthetic data instead of exchange historical data")
+    parser.add_argument("--strategy", default=None, help="strategy id to backtest")
     args = parser.parse_args()
-    result = Backtester(offline=not args.live_data).run()
+    result = Backtester(offline=args.offline, strategy_id=args.strategy).run()
+    print(f"strategy={result.strategy_id} ({result.strategy_name})")
     print(f"final_equity={result.final_equity:.2f}")
     print(f"return_pct={result.return_pct:.2f}%")
     print(f"max_drawdown={result.max_drawdown:.2%}")
@@ -144,8 +165,8 @@ def main() -> None:
     print(f"profit_factor={result.profit_factor:.2f}")
     print(f"max_consecutive_losses={result.max_consecutive_losses}")
     print(f"pause_count={result.pause_count}")
+    print("data_source=" + ",".join(f"{symbol}={source}" for symbol, source in sorted(result.data_sources.items())))
 
 
 if __name__ == "__main__":
     main()
-

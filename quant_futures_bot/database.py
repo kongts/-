@@ -23,7 +23,8 @@ class Database:
         statements = [
             """CREATE TABLE IF NOT EXISTS market_data (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                symbol TEXT, timestamp TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL
+                symbol TEXT, timestamp TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL,
+                data_source TEXT DEFAULT 'unknown'
             )""",
             """CREATE TABLE IF NOT EXISTS signals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,12 +32,14 @@ class Database:
             )""",
             """CREATE TABLE IF NOT EXISTS orders (
                 order_id TEXT PRIMARY KEY, timestamp TEXT, symbol TEXT, side TEXT,
-                position_action TEXT, qty REAL, price REAL, reduce_only INTEGER, status TEXT
+                position_action TEXT, qty REAL, price REAL, reduce_only INTEGER, status TEXT,
+                exchange_order_id TEXT DEFAULT ''
             )""",
             """CREATE TABLE IF NOT EXISTS fills (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 order_id TEXT, timestamp TEXT, symbol TEXT, fill_price REAL,
-                qty REAL, fee REAL, slippage REAL, position_action TEXT
+                qty REAL, fee REAL, slippage REAL, position_action TEXT,
+                exchange_order_id TEXT DEFAULT ''
             )""",
             """CREATE TABLE IF NOT EXISTS positions (
                 symbol TEXT PRIMARY KEY, payload TEXT, updated_at TEXT
@@ -57,13 +60,22 @@ class Database:
         ]
         for statement in statements:
             self.conn.execute(statement)
+        self._ensure_column("market_data", "data_source", "TEXT DEFAULT 'unknown'")
+        self._ensure_column("orders", "exchange_order_id", "TEXT DEFAULT ''")
+        self._ensure_column("fills", "exchange_order_id", "TEXT DEFAULT ''")
         self.conn.commit()
 
-    def save_market_data(self, symbol: str, df: pd.DataFrame) -> None:
+    def _ensure_column(self, table: str, column: str, definition: str) -> None:
+        existing = {row["name"] for row in self.conn.execute(f"PRAGMA table_info({table})")}
+        if column not in existing:
+            self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    def save_market_data(self, symbol: str, df: pd.DataFrame, data_source: str | None = None) -> None:
         rows = df.tail(1)
         for _, row in rows.iterrows():
+            source = data_source or str(row.get("data_source", "unknown"))
             self.conn.execute(
-                "INSERT INTO market_data(symbol,timestamp,open,high,low,close,volume) VALUES(?,?,?,?,?,?,?)",
+                "INSERT INTO market_data(symbol,timestamp,open,high,low,close,volume,data_source) VALUES(?,?,?,?,?,?,?,?)",
                 (
                     symbol,
                     str(row["timestamp"]),
@@ -72,6 +84,7 @@ class Database:
                     float(row["low"]),
                     float(row["close"]),
                     float(row["volume"]),
+                    source,
                 ),
             )
         self.conn.commit()
@@ -85,8 +98,8 @@ class Database:
 
     def save_order(self, order) -> None:
         self.conn.execute(
-            """INSERT OR REPLACE INTO orders(order_id,timestamp,symbol,side,position_action,qty,price,reduce_only,status)
-               VALUES(?,?,?,?,?,?,?,?,?)""",
+            """INSERT OR REPLACE INTO orders(order_id,timestamp,symbol,side,position_action,qty,price,reduce_only,status,exchange_order_id)
+               VALUES(?,?,?,?,?,?,?,?,?,?)""",
             (
                 order.order_id,
                 order.timestamp.isoformat(),
@@ -97,13 +110,14 @@ class Database:
                 order.price,
                 int(order.reduce_only),
                 order.status.value,
+                getattr(order, "exchange_order_id", ""),
             ),
         )
         self.conn.commit()
 
     def save_fill(self, fill) -> None:
         self.conn.execute(
-            "INSERT INTO fills(order_id,timestamp,symbol,fill_price,qty,fee,slippage,position_action) VALUES(?,?,?,?,?,?,?,?)",
+            "INSERT INTO fills(order_id,timestamp,symbol,fill_price,qty,fee,slippage,position_action,exchange_order_id) VALUES(?,?,?,?,?,?,?,?,?)",
             (
                 fill.order_id,
                 fill.timestamp.isoformat(),
@@ -113,8 +127,14 @@ class Database:
                 fill.fee,
                 fill.slippage,
                 fill.position_action.value,
+                getattr(fill, "exchange_order_id", ""),
             ),
         )
+        if getattr(fill, "exchange_order_id", ""):
+            self.conn.execute(
+                "UPDATE orders SET exchange_order_id = ? WHERE order_id = ?",
+                (fill.exchange_order_id, fill.order_id),
+            )
         self.conn.commit()
 
     def save_portfolio(self, portfolio) -> None:
@@ -154,4 +174,3 @@ class Database:
         if is_dataclass(obj):
             return json.dumps(asdict(obj), default=str, ensure_ascii=False)
         return json.dumps(obj, default=str, ensure_ascii=False)
-
