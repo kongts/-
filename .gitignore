@@ -7,6 +7,8 @@ env/
 quant_futures_bot/data/*.db
 quant_futures_bot/data/*.csv
 quant_futures_bot/data/altcoin_strategy_latest.json
+quant_futures_bot/data/altcoin_paper_state.json
+quant_futures_bot/data/altcoin_paper_latest.json
 quant_futures_bot/data/state.json
 quant_futures_bot/data/selected_strategy.json
 quant_futures_bot/logs/*.log

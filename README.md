@@ -5,6 +5,7 @@
 - `quant-websocket.service`：WebSocket 实时盯盘、同步测试盘账户、执行当前主策略。
 - `quant-optimizer.timer`：每 4 小时优化 BTC/ETH/SOL 的主策略。
 - `quant-altcoin-optimizer.timer`：每 1 小时滚动回测山寨币激进策略，输出排名和日志。
+- `quant-altcoin-paper.timer`：每 15 分钟按最新山寨币排名跑 paper 模拟盘状态。
 
 测试盘会真实向 Binance Futures Testnet/Demo 发订单，但不会动真实资金。
 
@@ -148,7 +149,48 @@ quant_futures_bot/data/altcoin_top100_rolling_backtest.csv
 
 注意：目前山寨币激进策略默认只做滚动回测和排名输出，不会自动接管实盘/测试盘下单。主交易仍由 `quant-websocket.service` 的当前主策略执行。
 
-## 6. 数据文件
+## 6. 山寨币 paper 模拟盘运行情况
+
+山寨币 paper 模拟盘会读取：
+
+```text
+quant_futures_bot/data/altcoin_strategy_latest.json
+```
+
+然后选排名前 5 的币，按对应策略、周期和风控参数做 paper 模拟开平仓。它不会向交易所下单，只用于观察山寨币策略实际滚动运行后的权益、持仓、信号和成交情况。
+
+本地手动运行一次：
+
+```bat
+run_altcoin_paper_once.bat
+```
+
+服务器每 15 分钟自动运行：
+
+```bash
+sudo systemctl enable --now quant-altcoin-paper.timer
+```
+
+查看运行日志：
+
+```bash
+journalctl -u quant-altcoin-paper.service -n 100
+tail -f quant_futures_bot/logs/altcoin_paper.log
+```
+
+查看最新 paper 状态：
+
+```bash
+cat quant_futures_bot/data/altcoin_paper_latest.json
+```
+
+查看 paper 持仓状态文件：
+
+```bash
+cat quant_futures_bot/data/altcoin_paper_state.json
+```
+
+## 7. 数据文件
 
 常用文件：
 
@@ -156,14 +198,17 @@ quant_futures_bot/data/altcoin_top100_rolling_backtest.csv
 quant_futures_bot/data/state.json
 quant_futures_bot/data/selected_strategy.json
 quant_futures_bot/data/altcoin_strategy_latest.json
+quant_futures_bot/data/altcoin_paper_latest.json
+quant_futures_bot/data/altcoin_paper_state.json
 quant_futures_bot/data/altcoin_top100_rolling_backtest.csv
 quant_futures_bot/logs/error.log
 quant_futures_bot/logs/altcoin_strategy.log
+quant_futures_bot/logs/altcoin_paper.log
 ```
 
 `state.json` 可以查看当前账户权益、持仓、系统状态、最大回撤、连续亏损次数。
 
-## 7. 云服务器部署
+## 8. 云服务器部署
 
 完整 Ubuntu 部署说明：
 
@@ -183,6 +228,8 @@ sudo cp deploy/quant-optimizer.service /etc/systemd/system/quant-optimizer.servi
 sudo cp deploy/quant-optimizer.timer /etc/systemd/system/quant-optimizer.timer
 sudo cp deploy/quant-altcoin-optimizer.service /etc/systemd/system/quant-altcoin-optimizer.service
 sudo cp deploy/quant-altcoin-optimizer.timer /etc/systemd/system/quant-altcoin-optimizer.timer
+sudo cp deploy/quant-altcoin-paper.service /etc/systemd/system/quant-altcoin-paper.service
+sudo cp deploy/quant-altcoin-paper.timer /etc/systemd/system/quant-altcoin-paper.timer
 sudo systemctl daemon-reload
 ```
 
@@ -192,6 +239,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now quant-websocket.service
 sudo systemctl enable --now quant-optimizer.timer
 sudo systemctl enable --now quant-altcoin-optimizer.timer
+sudo systemctl enable --now quant-altcoin-paper.timer
 ```
 
 查看服务：
@@ -200,6 +248,7 @@ sudo systemctl enable --now quant-altcoin-optimizer.timer
 sudo systemctl status quant-websocket.service
 sudo systemctl status quant-optimizer.timer
 sudo systemctl status quant-altcoin-optimizer.timer
+sudo systemctl status quant-altcoin-paper.timer
 ```
 
 停止服务：
@@ -208,8 +257,9 @@ sudo systemctl status quant-altcoin-optimizer.timer
 sudo systemctl stop quant-websocket.service
 sudo systemctl stop quant-optimizer.timer
 sudo systemctl stop quant-altcoin-optimizer.timer
+sudo systemctl stop quant-altcoin-paper.timer
 ```
 
-## 8. 安全提醒
+## 9. 安全提醒
 
 `.env`、数据库、状态文件、CSV 结果和日志都不应提交到 Git。项目已在 `.gitignore` 中排除这些运行时文件。

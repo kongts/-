@@ -57,9 +57,10 @@ set -a; source .env; set +a
 python -m quant_futures_bot.strategy_optimizer
 python -m quant_futures_bot.websocket_monitor --print-seconds 5
 python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 20 --limit 300 --show 10
+python -m quant_futures_bot.altcoin_paper_monitor --run-once --top 5
 ```
 
-看到 `websocket_tick` 说明 WebSocket 行情正常。看到 `altcoin top-volume aggressive strategy backtest` 说明山寨币策略回测正常。
+看到 `websocket_tick` 说明 WebSocket 行情正常。看到 `altcoin top-volume aggressive strategy backtest` 说明山寨币策略回测正常。看到 `paper_summary` 说明山寨币 paper 模拟盘状态正常。
 
 ## 5. 安装 systemd 服务
 
@@ -69,6 +70,8 @@ sudo cp deploy/quant-optimizer.service /etc/systemd/system/quant-optimizer.servi
 sudo cp deploy/quant-optimizer.timer /etc/systemd/system/quant-optimizer.timer
 sudo cp deploy/quant-altcoin-optimizer.service /etc/systemd/system/quant-altcoin-optimizer.service
 sudo cp deploy/quant-altcoin-optimizer.timer /etc/systemd/system/quant-altcoin-optimizer.timer
+sudo cp deploy/quant-altcoin-paper.service /etc/systemd/system/quant-altcoin-paper.service
+sudo cp deploy/quant-altcoin-paper.timer /etc/systemd/system/quant-altcoin-paper.timer
 sudo systemctl daemon-reload
 ```
 
@@ -78,6 +81,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now quant-websocket.service
 sudo systemctl enable --now quant-optimizer.timer
 sudo systemctl enable --now quant-altcoin-optimizer.timer
+sudo systemctl enable --now quant-altcoin-paper.timer
 ```
 
 ## 7. 查看日志
@@ -102,14 +106,24 @@ tail -f /opt/quant-futures-bot/quant_futures_bot/logs/altcoin_strategy.log
 cat /opt/quant-futures-bot/quant_futures_bot/data/altcoin_strategy_latest.json
 ```
 
+山寨币 paper 模拟盘：
+
+```bash
+journalctl -u quant-altcoin-paper.service -n 100
+tail -f /opt/quant-futures-bot/quant_futures_bot/logs/altcoin_paper.log
+cat /opt/quant-futures-bot/quant_futures_bot/data/altcoin_paper_latest.json
+```
+
 ## 8. 查看 timer
 
 ```bash
 systemctl list-timers | grep quant
 sudo systemctl status quant-altcoin-optimizer.timer
+sudo systemctl status quant-altcoin-paper.timer
 ```
 
 `quant-altcoin-optimizer.timer` 每 1 小时运行一次。
+`quant-altcoin-paper.timer` 每 15 分钟运行一次。
 
 ## 9. 停止服务
 
@@ -117,6 +131,7 @@ sudo systemctl status quant-altcoin-optimizer.timer
 sudo systemctl stop quant-websocket.service
 sudo systemctl stop quant-optimizer.timer
 sudo systemctl stop quant-altcoin-optimizer.timer
+sudo systemctl stop quant-altcoin-paper.timer
 ```
 
 ## 10. 常见问题
@@ -139,5 +154,7 @@ git pull
 ```bash
 sudo cp deploy/quant-altcoin-optimizer.service /etc/systemd/system/quant-altcoin-optimizer.service
 sudo cp deploy/quant-altcoin-optimizer.timer /etc/systemd/system/quant-altcoin-optimizer.timer
+sudo cp deploy/quant-altcoin-paper.service /etc/systemd/system/quant-altcoin-paper.service
+sudo cp deploy/quant-altcoin-paper.timer /etc/systemd/system/quant-altcoin-paper.timer
 sudo systemctl daemon-reload
 ```

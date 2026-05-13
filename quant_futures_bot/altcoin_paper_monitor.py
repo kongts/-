@@ -1,0 +1,228 @@
+from __future__ import annotations
+
+import argparse
+import json
+import time
+from datetime import datetime
+from pathlib import Path
+
+from .config import DATA_DIR, FEE_RATE, LOG_DIR
+from .data import MarketDataProvider
+from .events import OrderStatus, SignalEvent, SignalType
+from .execution import PaperExecution
+from .indicators import add_indicators
+from .market_state import detect_market_state
+from .order_manager import OrderManager
+from .pause_manager import PauseManager
+from .portfolio import Portfolio
+from .risk_engine import RiskEngine
+from .strategy_manager import StrategyManager
+
+
+DEFAULT_STRATEGY_PATH = DATA_DIR / "altcoin_strategy_latest.json"
+DEFAULT_STATE_PATH = DATA_DIR / "altcoin_paper_state.json"
+DEFAULT_LATEST_PATH = DATA_DIR / "altcoin_paper_latest.json"
+
+
+class AltcoinPaperMonitor:
+    def __init__(
+        self,
+        strategy_path: Path = DEFAULT_STRATEGY_PATH,
+        state_path: Path = DEFAULT_STATE_PATH,
+        latest_path: Path = DEFAULT_LATEST_PATH,
+        top: int = 5,
+        candle_limit: int = 220,
+        max_margin_ratio: float = 0.03,
+        leverage: int = 2,
+        stop_loss_pct: float = 0.025,
+        take_profit_pct: float = 0.06,
+    ) -> None:
+        self.strategy_path = strategy_path
+        self.state_path = state_path
+        self.latest_path = latest_path
+        self.top = top
+        self.candle_limit = candle_limit
+        self.max_margin_ratio = max_margin_ratio
+        self.leverage = leverage
+        self.stop_loss_pct = stop_loss_pct
+        self.take_profit_pct = take_profit_pct
+        self.data_provider = MarketDataProvider(use_exchange=True, fallback_to_synthetic=False)
+        self.portfolio = self.load_portfolio()
+        self.pause_manager = PauseManager()
+        self.execution = PaperExecution()
+        self.order_manager = OrderManager()
+
+    def run_once(self) -> None:
+        leaders = self.load_leaders()
+        cycle_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.log(f"[{cycle_started_at}] start altcoin paper cycle leaders={len(leaders)} top={self.top}")
+        signals_created = 0
+        fills_created = 0
+        rejected = 0
+        for leader in leaders[: self.top]:
+            symbol = leader["symbol"]
+            strategy_id = leader["strategy_id"]
+            timeframe = leader["timeframe"]
+            try:
+                frame = add_indicators(self.data_provider.fetch_ohlcv(symbol, timeframe=timeframe, limit=self.candle_limit))
+                price = float(frame.iloc[-1]["close"])
+                latest_row = frame.iloc[-1].to_dict()
+                self.portfolio.update_market_price(symbol, price)
+                exit_signal = self.stop_or_take_profit_signal(symbol, price)
+                if exit_signal is not None:
+                    ok = self.execute_signal(exit_signal, latest_row)
+                    signals_created += 1
+                    fills_created += 1 if ok else 0
+                    rejected += 0 if ok else 1
+                    continue
+                manager = StrategyManager(strategy_id=strategy_id, use_saved_selection=False)
+                market_state = detect_market_state(frame)
+                current_side = self.portfolio.position_side(symbol)
+                signals = manager.generate(symbol, frame, market_state, current_side)
+                for signal in signals:
+                    signals_created += 1
+                    ok = self.execute_signal(signal, latest_row)
+                    fills_created += 1 if ok else 0
+                    rejected += 0 if ok else 1
+            except Exception as exc:
+                self.log(f"symbol_error symbol={symbol} strategy={strategy_id}/{timeframe} error={exc}")
+        self.save_portfolio()
+        self.write_latest(signals_created, fills_created, rejected)
+        self.log(
+            f"paper_summary equity={self.portfolio.equity:.2f} used_margin={self.portfolio.used_margin:.2f} "
+            f"unrealized={self.portfolio.unrealized_pnl:.2f} realized={self.portfolio.realized_pnl:.2f} "
+            f"signals={signals_created} fills={fills_created} rejected={rejected} positions={self.format_positions()}"
+        )
+
+    def execute_signal(self, signal: SignalEvent, latest_row: dict) -> bool:
+        symbol_configs = {
+            signal.symbol: {
+                "symbol": signal.symbol,
+                "enabled": True,
+                "leverage": self.leverage,
+                "max_margin_ratio": self.max_margin_ratio,
+            }
+        }
+        risk_engine = RiskEngine(self.portfolio, self.pause_manager, symbol_configs=symbol_configs)
+        risk = risk_engine.check_signal(signal, latest_row)
+        if not risk.approved:
+            self.log(f"signal_rejected symbol={signal.symbol} signal={signal.signal_type.value} reason={risk.reason}")
+            return False
+        qty = risk_engine.order_quantity(signal)
+        if qty <= 0:
+            self.log(f"signal_rejected symbol={signal.symbol} signal={signal.signal_type.value} reason=no quantity")
+            return False
+        order = self.order_manager.create_order(signal, qty)
+        submitted = self.order_manager.update_status(order.order_id, OrderStatus.SUBMITTED)
+        fill = self.execution.execute(submitted)
+        pnl = self.portfolio.apply_fill(fill, leverage=float(self.leverage))
+        self.order_manager.update_status(order.order_id, OrderStatus.FILLED)
+        self.log(
+            f"paper_fill symbol={fill.symbol} action={fill.position_action.value} price={fill.fill_price:.6f} "
+            f"qty={fill.qty:.8f} fee={fill.fee:.4f} pnl={pnl:.4f}"
+        )
+        return True
+
+    def stop_or_take_profit_signal(self, symbol: str, price: float) -> SignalEvent | None:
+        pos = self.portfolio.get_position(symbol)
+        if not pos.is_open() or pos.entry_price <= 0:
+            return None
+        if pos.position_side == "LONG":
+            change = price / pos.entry_price - 1
+            close_type = SignalType.CLOSE_LONG
+        else:
+            change = pos.entry_price / price - 1
+            close_type = SignalType.CLOSE_SHORT
+        if change <= -self.stop_loss_pct:
+            return SignalEvent(symbol, close_type, "Altcoin Paper Stop Loss", price)
+        if change >= self.take_profit_pct:
+            return SignalEvent(symbol, close_type, "Altcoin Paper Take Profit", price)
+        return None
+
+    def load_leaders(self) -> list[dict]:
+        if not self.strategy_path.exists():
+            self.log(f"missing_altcoin_strategy_latest path={self.strategy_path}")
+            return []
+        payload = json.loads(self.strategy_path.read_text(encoding="utf-8"))
+        return list(payload.get("leaders", []))
+
+    def load_portfolio(self) -> Portfolio:
+        if self.state_path.exists():
+            try:
+                return Portfolio.from_dict(json.loads(self.state_path.read_text(encoding="utf-8")))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+        return Portfolio()
+
+    def save_portfolio(self) -> None:
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        self.state_path.write_text(json.dumps(self.portfolio.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def write_latest(self, signals_created: int, fills_created: int, rejected: int) -> None:
+        payload = {
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "mode": "paper",
+            "equity": self.portfolio.equity,
+            "cash": self.portfolio.cash,
+            "used_margin": self.portfolio.used_margin,
+            "available_balance": self.portfolio.available_balance,
+            "realized_pnl": self.portfolio.realized_pnl,
+            "unrealized_pnl": self.portfolio.unrealized_pnl,
+            "max_drawdown": self.portfolio.max_drawdown,
+            "signals_created": signals_created,
+            "fills_created": fills_created,
+            "rejected": rejected,
+            "fee_rate": FEE_RATE,
+            "positions": self.portfolio.to_dict()["positions"],
+        }
+        self.latest_path.parent.mkdir(parents=True, exist_ok=True)
+        self.latest_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def format_positions(self) -> str:
+        active = []
+        for symbol, pos in sorted(self.portfolio.positions.items()):
+            if pos.is_open():
+                active.append(
+                    f"{symbol}:{pos.position_side} qty={pos.qty:.6f} entry={pos.entry_price:.6f} pnl={pos.unrealized_pnl:.2f}"
+                )
+        return ";".join(active) or "-"
+
+    @staticmethod
+    def log(message: str) -> None:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        line = message if message.startswith("[") else f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}"
+        print(line, flush=True)
+        with (LOG_DIR / "altcoin_paper.log").open("a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run paper trading monitor for latest altcoin aggressive strategies")
+    parser.add_argument("--run-once", action="store_true", help="run once and exit")
+    parser.add_argument("--interval-minutes", type=float, default=15.0, help="minutes between paper cycles")
+    parser.add_argument("--top", type=int, default=5, help="number of latest leaders to paper trade")
+    parser.add_argument("--candle-limit", type=int, default=220, help="candles per symbol/timeframe")
+    parser.add_argument("--max-margin-ratio", type=float, default=0.03, help="margin ratio per symbol")
+    parser.add_argument("--leverage", type=int, default=2, help="paper leverage")
+    parser.add_argument("--stop-loss-pct", type=float, default=0.025, help="stop loss percentage")
+    parser.add_argument("--take-profit-pct", type=float, default=0.06, help="take profit percentage")
+    args = parser.parse_args()
+
+    monitor = AltcoinPaperMonitor(
+        top=args.top,
+        candle_limit=args.candle_limit,
+        max_margin_ratio=args.max_margin_ratio,
+        leverage=args.leverage,
+        stop_loss_pct=args.stop_loss_pct,
+        take_profit_pct=args.take_profit_pct,
+    )
+    if args.run_once:
+        monitor.run_once()
+        return
+    while True:
+        monitor.run_once()
+        time.sleep(max(60, int(args.interval_minutes * 60)))
+
+
+if __name__ == "__main__":
+    main()
