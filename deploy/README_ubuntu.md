@@ -42,6 +42,7 @@ sudo cp deploy/quant-altcoin-optimizer.service /etc/systemd/system/quant-altcoin
 sudo cp deploy/quant-altcoin-optimizer.timer /etc/systemd/system/quant-altcoin-optimizer.timer
 sudo cp deploy/quant-altcoin-paper.service /etc/systemd/system/quant-altcoin-paper.service
 sudo cp deploy/quant-altcoin-paper.timer /etc/systemd/system/quant-altcoin-paper.timer
+sudo cp deploy/quant-altcoin-websocket.service /etc/systemd/system/quant-altcoin-websocket.service
 sudo cp deploy/quant-altcoin-testnet.service /etc/systemd/system/quant-altcoin-testnet.service
 sudo cp deploy/quant-altcoin-testnet.timer /etc/systemd/system/quant-altcoin-testnet.timer
 
@@ -212,9 +213,44 @@ sudo systemctl stop quant-altcoin-paper.service
 sudo systemctl disable quant-altcoin-paper.timer
 ```
 
-### 山寨币 Testnet 限价挂单
+### 山寨币 Testnet WebSocket 盯盘
 
-用途：每 15 分钟按最新山寨币策略向 Binance Futures Demo/Testnet 提交 post-only 限价挂单。
+用途：实时订阅最新山寨币排名前 5 的 bookTicker；每到对应 15m/30m K 线收盘运行策略；每 30 秒维护挂单超时、撤单和暂停状态。
+
+启动：
+
+```bash
+sudo systemctl enable --now quant-altcoin-websocket.service
+```
+
+查看状态：
+
+```bash
+systemctl status quant-altcoin-websocket.service
+```
+
+查看日志：
+
+```bash
+journalctl -u quant-altcoin-websocket.service -f
+tail -f /opt/quant-futures-bot/quant_futures_bot/logs/altcoin_testnet.log
+```
+
+停止：
+
+```bash
+sudo systemctl stop quant-altcoin-websocket.service
+```
+
+禁用开机自启：
+
+```bash
+sudo systemctl disable quant-altcoin-websocket.service
+```
+
+### 山寨币 Testnet 限价挂单定时器备用
+
+用途：备用周期检查。现在主运行方式是 `quant-altcoin-websocket.service`，这个 timer 一般不用同时开启，避免两条服务同时提交山寨币订单。
 
 启动：
 
@@ -262,6 +298,7 @@ systemctl status quant-websocket.service
 systemctl status quant-optimizer.timer
 systemctl status quant-altcoin-optimizer.timer
 systemctl status quant-altcoin-paper.timer
+systemctl status quant-altcoin-websocket.service
 systemctl status quant-altcoin-testnet.timer
 ```
 
@@ -275,6 +312,7 @@ sudo systemctl stop quant-altcoin-optimizer.timer
 sudo systemctl stop quant-altcoin-optimizer.service
 sudo systemctl stop quant-altcoin-paper.timer
 sudo systemctl stop quant-altcoin-paper.service
+sudo systemctl stop quant-altcoin-websocket.service
 sudo systemctl stop quant-altcoin-testnet.timer
 sudo systemctl stop quant-altcoin-testnet.service
 ```
@@ -287,7 +325,7 @@ sudo systemctl stop quant-altcoin-testnet.service
 sudo systemctl enable --now quant-websocket.service
 sudo systemctl enable --now quant-optimizer.timer
 sudo systemctl enable --now quant-altcoin-optimizer.timer
-sudo systemctl enable --now quant-altcoin-testnet.timer
+sudo systemctl enable --now quant-altcoin-websocket.service
 ```
 
 只模拟山寨币，不向交易所下单：

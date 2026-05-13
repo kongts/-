@@ -188,6 +188,22 @@ class AltcoinPaperMonitor:
             f"exchange_positions={self.exchange_positions_summary} positions={self.format_positions()}"
         )
 
+    def maintain_orders(self, symbols: list[str]) -> None:
+        sync_symbols = sorted(set(symbols) | set(self.pending_orders))
+        self.sync_exchange_account(sync_symbols)
+        self.manage_pending_orders()
+        self.sync_exchange_account(sync_symbols)
+        self.prune_runtime_state()
+        self.save_portfolio()
+        self.save_runtime_state()
+        self.write_latest(0, 0, 0, 0, [])
+        self.log(
+            f"{self.execution_mode}_maintenance equity={self.portfolio.equity:.2f} used_margin={self.portfolio.used_margin:.2f} "
+            f"unrealized={self.portfolio.unrealized_pnl:.2f} exchange_open_orders={self.exchange_open_order_count} "
+            f"pending_orders={len(self.pending_orders)} paused_symbols={len(self.paused_symbols)} "
+            f"exchange_positions={self.exchange_positions_summary}"
+        )
+
     def sync_exchange_account(self, symbols: list[str]) -> None:
         if self.account_sync is None:
             self.exchange_open_order_count = 0
