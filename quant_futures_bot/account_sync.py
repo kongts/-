@@ -27,13 +27,15 @@ class ExchangeAccountSnapshot:
 
 
 class BinanceAccountSync:
-    def __init__(self, exchange) -> None:
+    def __init__(self, exchange, symbols: list[str] | None = None) -> None:
         self.exchange = exchange
+        self.symbols = symbols
 
-    def fetch(self) -> ExchangeAccountSnapshot:
+    def fetch(self, symbols: list[str] | None = None) -> ExchangeAccountSnapshot:
+        selected_symbols = symbols or self.symbols or [item["symbol"] for item in enabled_symbols()]
         balance = self.exchange.fetch_balance()
-        positions = self._fetch_positions()
-        open_orders = self._fetch_open_orders()
+        positions = self._fetch_positions(selected_symbols)
+        open_orders = self._fetch_open_orders(selected_symbols)
         total = balance.get("total", {})
         free = balance.get("free", {})
         info = balance.get("info", {})
@@ -52,8 +54,7 @@ class BinanceAccountSync:
             open_order_count=len(open_orders),
         )
 
-    def _fetch_positions(self) -> dict[str, dict]:
-        symbols = [item["symbol"] for item in enabled_symbols()]
+    def _fetch_positions(self, symbols: list[str]) -> dict[str, dict]:
         positions: dict[str, dict] = {
             symbol: {
                 "position_side": "FLAT",
@@ -91,11 +92,11 @@ class BinanceAccountSync:
             }
         return positions
 
-    def _fetch_open_orders(self) -> list[dict]:
+    def _fetch_open_orders(self, symbols: list[str]) -> list[dict]:
         orders: list[dict] = []
-        for item in enabled_symbols():
+        for symbol in symbols:
             try:
-                orders.extend(self.exchange.fetch_open_orders(item["symbol"]))
+                orders.extend(self.exchange.fetch_open_orders(symbol))
             except Exception:
                 continue
         return orders

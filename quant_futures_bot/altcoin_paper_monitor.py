@@ -6,6 +6,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from .account_sync import BinanceAccountSync
 from .config import DATA_DIR, FEE_RATE, LOG_DIR
 from .data import MarketDataProvider
 from .events import OrderStatus, SignalEvent, SignalType
@@ -81,12 +82,16 @@ class AltcoinPaperMonitor:
         self.short_trailing_peaks: dict[str, float] = dict(runtime_state.get("short_trailing_peaks", {}))
         self.pause_manager = PauseManager()
         self.execution = BinanceTestnetExecution() if execution_mode == "testnet" else PaperExecution()
+        self.account_sync = BinanceAccountSync(self.execution.exchange) if isinstance(self.execution, BinanceTestnetExecution) else None
         self.order_manager = OrderManager()
+        self.exchange_open_order_count = 0
+        self.exchange_positions_summary = "-"
 
     def run_once(self) -> None:
         leaders = self.load_leaders()
         cycle_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.log(f"[{cycle_started_at}] start altcoin {self.execution_mode} cycle leaders={len(leaders)} top={self.top}")
+        self.sync_exchange_account([leader["symbol"] for leader in leaders[: self.top]])
         signals_created = 0
         orders_created = 0
         fills_created = 0
@@ -160,8 +165,19 @@ class AltcoinPaperMonitor:
             f"{self.execution_mode}_summary equity={self.portfolio.equity:.2f} used_margin={self.portfolio.used_margin:.2f} "
             f"unrealized={self.portfolio.unrealized_pnl:.2f} realized={self.portfolio.realized_pnl:.2f} "
             f"signals={signals_created} orders={orders_created} fills={fills_created} rejected={rejected} order_type={self.order_type} "
-            f"exchange_order_ids={','.join(exchange_order_ids) or '-'} positions={self.format_positions()}"
+            f"exchange_order_ids={','.join(exchange_order_ids) or '-'} exchange_open_orders={self.exchange_open_order_count} "
+            f"exchange_positions={self.exchange_positions_summary} positions={self.format_positions()}"
         )
+
+    def sync_exchange_account(self, symbols: list[str]) -> None:
+        if self.account_sync is None:
+            self.exchange_open_order_count = 0
+            self.exchange_positions_summary = "-"
+            return
+        snapshot = self.account_sync.fetch(symbols)
+        self.exchange_open_order_count = snapshot.open_order_count
+        self.portfolio.sync_from_exchange(snapshot.to_portfolio_payload())
+        self.exchange_positions_summary = self.format_exchange_positions(snapshot.positions or {})
 
     def execute_signal(self, signal: SignalEvent, latest_row: dict) -> tuple[bool, bool, list[str]]:
         symbol_configs = {
@@ -319,6 +335,8 @@ class AltcoinPaperMonitor:
             "fills_created": fills_created,
             "rejected": rejected,
             "exchange_order_ids": exchange_order_ids,
+            "exchange_open_order_count": self.exchange_open_order_count,
+            "exchange_positions_summary": self.exchange_positions_summary,
             "order_type": self.order_type,
             "crash_drop_pct": self.crash_drop_pct,
             "crash_breadth_ratio": self.crash_breadth_ratio,
@@ -336,6 +354,17 @@ class AltcoinPaperMonitor:
             if pos.is_open():
                 active.append(
                     f"{symbol}:{pos.position_side} qty={pos.qty:.6f} entry={pos.entry_price:.6f} pnl={pos.unrealized_pnl:.2f}"
+                )
+        return ";".join(active) or "-"
+
+    @staticmethod
+    def format_exchange_positions(positions: dict[str, dict]) -> str:
+        active = []
+        for symbol, pos in sorted(positions.items()):
+            if pos["position_side"] != "FLAT" and pos["qty"] > 0:
+                active.append(
+                    f"{symbol}:{pos['position_side']} qty={pos['qty']:.6f} "
+                    f"entry={pos['entry_price']:.4f} pnl={pos['unrealized_pnl']:.2f}"
                 )
         return ";".join(active) or "-"
 
