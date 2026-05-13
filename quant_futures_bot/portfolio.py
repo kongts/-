@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .config import INITIAL_CASH, RECENT_TRADE_WINDOW
 from .events import FillEvent, SignalType
@@ -120,6 +120,29 @@ class Portfolio:
         if self.peak_equity > 0:
             self.max_drawdown = max(self.max_drawdown, (self.peak_equity - self.equity) / self.peak_equity)
 
+    def sync_from_exchange(self, account: dict) -> None:
+        self.cash = float(account.get("cash", self.cash))
+        self.equity = float(account.get("equity", self.equity))
+        self.available_balance = float(account.get("available_balance", self.available_balance))
+        self.used_margin = float(account.get("used_margin", self.used_margin))
+        self.unrealized_pnl = float(account.get("unrealized_pnl", self.unrealized_pnl))
+        self.peak_equity = max(self.peak_equity, self.equity)
+        if self.peak_equity > 0:
+            self.max_drawdown = max(self.max_drawdown, (self.peak_equity - self.equity) / self.peak_equity)
+        exchange_positions = account.get("positions", {})
+        for symbol, payload in exchange_positions.items():
+            pos = self.get_position(symbol)
+            pos.position_side = payload["position_side"]
+            pos.entry_price = payload["entry_price"]
+            pos.qty = payload["qty"]
+            pos.margin_used = payload["margin_used"]
+            pos.notional_value = payload["notional_value"]
+            pos.unrealized_pnl = payload["unrealized_pnl"]
+            if pos.position_side == "FLAT":
+                pos.open_time = ""
+            elif not pos.open_time:
+                pos.open_time = datetime.now(timezone.utc).isoformat()
+
     def recent_win_rate(self) -> float:
         recent = self.closed_trade_pnls[-RECENT_TRADE_WINDOW:]
         if not recent:
@@ -162,4 +185,3 @@ class Portfolio:
             symbol: Position(**pos_data) for symbol, pos_data in data.get("positions", {}).items()
         }
         return portfolio
-

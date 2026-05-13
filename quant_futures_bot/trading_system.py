@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .account_sync import BinanceAccountSync
 from .database import Database
 from .data import MarketDataProvider
 from .events import ErrorEvent, EventType, FillEvent, MarketEvent, OrderStatus, PauseEvent, SignalEvent
@@ -30,6 +31,7 @@ class TradingSystem:
         }
         self.order_manager = OrderManager()
         self.execution = create_execution()
+        self.account_sync = BinanceAccountSync(self.execution.exchange) if isinstance(self.execution, BinanceTestnetExecution) else None
         self.risk_engine = RiskEngine(self.portfolio, self.pause_manager)
         self.engine = EventEngine()
         self.latest_rows: dict[str, dict] = {}
@@ -39,6 +41,8 @@ class TradingSystem:
         self.cycle_signals_created = 0
         self.cycle_signals_rejected = 0
         self.cycle_exchange_order_ids: list[str] = []
+        self.exchange_open_order_count = 0
+        self.exchange_positions_summary = "-"
         self._register_handlers()
 
     def _register_handlers(self) -> None:
@@ -55,6 +59,7 @@ class TradingSystem:
         self.cycle_signals_created = 0
         self.cycle_signals_rejected = 0
         self.cycle_exchange_order_ids = []
+        self.sync_exchange_account()
         for item in enabled_symbols():
             symbol = item["symbol"]
             try:
@@ -73,6 +78,26 @@ class TradingSystem:
             self.engine.drain()
         self.database.save_portfolio(self.portfolio)
         self.state_manager.save(self.portfolio, self.pause_manager)
+
+    def sync_exchange_account(self) -> None:
+        if self.account_sync is None:
+            self.exchange_open_order_count = 0
+            self.exchange_positions_summary = "-"
+            return
+        snapshot = self.account_sync.fetch()
+        self.exchange_open_order_count = snapshot.open_order_count
+        self.portfolio.sync_from_exchange(snapshot.to_portfolio_payload())
+        self.exchange_positions_summary = self._format_exchange_positions(snapshot.positions or {})
+
+    @staticmethod
+    def _format_exchange_positions(positions: dict[str, dict]) -> str:
+        active = []
+        for symbol, pos in sorted(positions.items()):
+            if pos["position_side"] != "FLAT" and pos["qty"] > 0:
+                active.append(
+                    f"{symbol}:{pos['position_side']} qty={pos['qty']:.6f} entry={pos['entry_price']:.4f} pnl={pos['unrealized_pnl']:.2f}"
+                )
+        return ";".join(active) or "-"
 
     def on_market(self, event) -> None:
         assert isinstance(event, MarketEvent)

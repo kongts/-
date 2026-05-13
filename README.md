@@ -166,12 +166,24 @@ set BINANCE_TESTNET_API_SECRET=你的testnet_api_secret
 - `orders_created`：本轮生成的订单数
 - `fills_created`：本轮成交数
 - `exchange_order_ids`：Testnet 返回的订单 ID
+- `exchange_open_orders`：交易所当前挂单数量
+- `exchange_positions`：从 Binance Testnet 同步到的真实持仓摘要
 - `prices`：本轮拉到的最新收盘价
 - `strategy`：每个币种当前使用的策略和 K 线周期
 
 停止盯盘：在终端按 `Ctrl+C`。
 
 盯盘脚本每一轮都会重新读取 `selected_strategy.json`，所以如果你同时运行 `auto_optimize_every_4h.bat`，最新优化策略会在下一轮盯盘时生效。
+
+Testnet 模式下，每一轮盯盘开始时会先同步 Binance Testnet 账户：
+
+```text
+fetch_balance()
+fetch_positions()
+fetch_open_orders()
+```
+
+所以你在 Binance Testnet 网页手动开仓或平仓，下一轮日志里的 `exchange_positions` 会显示真实交易所持仓。
 
 如果终端提示缺少环境变量，可以运行：
 

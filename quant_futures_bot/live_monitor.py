@@ -39,6 +39,8 @@ def print_cycle_summary(system: TradingSystem, cycle: int) -> None:
         f"rejected={system.cycle_signals_rejected} orders_created={system.cycle_orders_created} "
         f"fills_created={system.cycle_fills_created} "
         f"exchange_order_ids={','.join(system.cycle_exchange_order_ids) or '-'} "
+        f"exchange_open_orders={system.exchange_open_order_count} "
+        f"exchange_positions={system.exchange_positions_summary} "
         f"prices={format_prices(system)} strategy={format_strategies(system)} "
         f"data_source={format_sources(system)}",
         flush=True,
