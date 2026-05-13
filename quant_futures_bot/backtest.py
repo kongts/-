@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from .data import MarketDataProvider
-from .events import OrderStatus
+from .events import OrderStatus, SignalEvent, SignalType
 from .execution import PaperExecution
 from .indicators import add_indicators
 from .market_state import detect_market_state
@@ -45,16 +45,22 @@ class Backtester:
         strategy_id: str | None = None,
         frames: dict[str, pd.DataFrame] | None = None,
         data_sources: dict[str, str] | None = None,
+        symbol_configs: dict[str, dict] | None = None,
+        stop_loss_pct: float = 0.0,
+        take_profit_pct: float = 0.0,
     ) -> None:
         self.data_provider = MarketDataProvider(use_exchange=not offline, fallback_to_synthetic=offline)
         self.strategy_manager = StrategyManager(strategy_id=strategy_id, use_saved_selection=strategy_id is None)
         self.frames = frames
         self.data_sources = data_sources or {}
+        self.symbol_configs = symbol_configs or {}
+        self.stop_loss_pct = stop_loss_pct
+        self.take_profit_pct = take_profit_pct
         self.order_manager = OrderManager()
         self.execution = PaperExecution()
         self.portfolio = Portfolio()
         self.pause_manager = PauseManager()
-        self.risk_engine = RiskEngine(self.portfolio, self.pause_manager)
+        self.risk_engine = RiskEngine(self.portfolio, self.pause_manager, symbol_configs=self.symbol_configs)
         self.trade_sides: list[str] = []
         self.trade_pnls: list[float] = []
         self.pause_count = 0
@@ -70,23 +76,14 @@ class Backtester:
                 price = float(window.iloc[-1]["close"])
                 self.portfolio.update_market_price(symbol, price)
                 latest_rows[symbol] = window.iloc[-1].to_dict()
+                exit_signal = self._stop_or_take_profit_signal(symbol, price)
+                if exit_signal is not None:
+                    self._execute_signal(exit_signal, latest_rows[symbol])
+                    continue
                 market_state = detect_market_state(window)
                 side = self.portfolio.position_side(symbol)
                 for signal in self.strategy_manager.generate(symbol, window, market_state, side):
-                    risk = self.risk_engine.check_signal(signal, latest_rows[symbol])
-                    if not risk.approved:
-                        continue
-                    qty = self.risk_engine.order_quantity(signal)
-                    if qty <= 0:
-                        continue
-                    order = self.order_manager.create_order(signal, qty)
-                    submitted = self.order_manager.update_status(order.order_id, OrderStatus.SUBMITTED)
-                    fill = self.execution.execute(submitted)
-                    pnl = self.portfolio.apply_fill(fill, float(get_symbol_config(symbol)["leverage"]))
-                    if fill.position_action.value.startswith("CLOSE"):
-                        self.trade_sides.append("LONG" if "LONG" in fill.position_action.value else "SHORT")
-                        self.trade_pnls.append(pnl)
-                    self.order_manager.update_status(order.order_id, OrderStatus.FILLED)
+                    self._execute_signal(signal, latest_rows[symbol])
             before_status = self.pause_manager.status
             self.pause_manager.check(self.portfolio, latest_rows)
             if before_status == "RUNNING" and self.pause_manager.status == "PAUSED":
@@ -101,6 +98,41 @@ class Backtester:
             frames[symbol] = add_indicators(self.data_provider.fetch_ohlcv(symbol, limit=limit))
         self.data_sources = dict(self.data_provider.last_source_by_symbol)
         return frames
+
+    def _symbol_config(self, symbol: str) -> dict:
+        return self.symbol_configs.get(symbol) or get_symbol_config(symbol)
+
+    def _execute_signal(self, signal: SignalEvent, latest_row: dict) -> None:
+        risk = self.risk_engine.check_signal(signal, latest_row)
+        if not risk.approved:
+            return
+        qty = self.risk_engine.order_quantity(signal)
+        if qty <= 0:
+            return
+        order = self.order_manager.create_order(signal, qty)
+        submitted = self.order_manager.update_status(order.order_id, OrderStatus.SUBMITTED)
+        fill = self.execution.execute(submitted)
+        pnl = self.portfolio.apply_fill(fill, float(self._symbol_config(signal.symbol)["leverage"]))
+        if fill.position_action.value.startswith("CLOSE"):
+            self.trade_sides.append("LONG" if "LONG" in fill.position_action.value else "SHORT")
+            self.trade_pnls.append(pnl)
+        self.order_manager.update_status(order.order_id, OrderStatus.FILLED)
+
+    def _stop_or_take_profit_signal(self, symbol: str, price: float) -> SignalEvent | None:
+        pos = self.portfolio.get_position(symbol)
+        if not pos.is_open() or pos.entry_price <= 0:
+            return None
+        if pos.position_side == "LONG":
+            change = price / pos.entry_price - 1
+            close_type = SignalType.CLOSE_LONG
+        else:
+            change = pos.entry_price / price - 1
+            close_type = SignalType.CLOSE_SHORT
+        if self.stop_loss_pct > 0 and change <= -self.stop_loss_pct:
+            return SignalEvent(symbol, close_type, "Stop Loss", price)
+        if self.take_profit_pct > 0 and change >= self.take_profit_pct:
+            return SignalEvent(symbol, close_type, "Take Profit", price)
+        return None
 
     def _result(self) -> BacktestResult:
         pnls = self.trade_pnls

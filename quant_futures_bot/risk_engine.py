@@ -6,9 +6,10 @@ from .symbol_config import get_symbol_config
 
 
 class RiskEngine:
-    def __init__(self, portfolio, pause_manager) -> None:
+    def __init__(self, portfolio, pause_manager, symbol_configs: dict[str, dict] | None = None) -> None:
         self.portfolio = portfolio
         self.pause_manager = pause_manager
+        self.symbol_configs = symbol_configs or {}
 
     def check_signal(self, signal: SignalEvent, latest_row: dict) -> RiskEvent:
         if not self._has_enough_data(latest_row):
@@ -25,7 +26,7 @@ class RiskEngine:
                 return RiskEvent(signal.symbol, False, f"system {self.pause_manager.status}", signal)
             if self._is_same_direction_duplicate(signal, current_side):
                 return RiskEvent(signal.symbol, False, "duplicate same-direction position", signal)
-            symbol_cfg = get_symbol_config(signal.symbol)
+            symbol_cfg = self._symbol_config(signal.symbol)
             leverage = float(symbol_cfg["leverage"])
             if leverage > config.MAX_LEVERAGE:
                 return RiskEvent(signal.symbol, False, "leverage exceeds max", signal)
@@ -46,10 +47,13 @@ class RiskEngine:
         pos = self.portfolio.get_position(signal.symbol)
         if signal.signal_type in {SignalType.CLOSE_LONG, SignalType.CLOSE_SHORT, SignalType.CLOSE_POSITION}:
             return pos.qty
-        symbol_cfg = get_symbol_config(signal.symbol)
+        symbol_cfg = self._symbol_config(signal.symbol)
         margin = self.portfolio.equity * float(symbol_cfg["max_margin_ratio"])
         notional = margin * float(symbol_cfg["leverage"])
         return round(notional / signal.price, 8)
+
+    def _symbol_config(self, symbol: str) -> dict:
+        return self.symbol_configs.get(symbol) or get_symbol_config(symbol)
 
     @staticmethod
     def _has_enough_data(latest_row: dict) -> bool:
@@ -64,4 +68,3 @@ class RiskEngine:
             or signal.signal_type == SignalType.OPEN_SHORT
             and current_side == "SHORT"
         )
-

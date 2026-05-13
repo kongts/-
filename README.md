@@ -35,6 +35,36 @@ quant_futures_bot/data/selected_strategy.json
 
 当前只使用 `4h` 和 `6h` 周期。
 
+## 山寨币前 100 激进策略回测
+
+抓取 Binance USDT 永续合约 24h 成交额排名前 100 的山寨币，并测试激进策略：
+
+```bat
+run_altcoin_top100_backtest.bat
+```
+
+默认设置：
+
+- 排除 BTC、ETH、稳定币、黄金、白银、天然气和股票映射类合约
+- 周期：`15m`、`30m`
+- 策略：短周期动量突破、成交量放大突破、波动率扩张突破
+- 止损：`2.5%`
+- 止盈：`6%`
+- 单币保证金占比：`3%`
+- 杠杆：`2x`
+
+输出文件：
+
+```text
+quant_futures_bot/data/altcoin_top100_backtest.csv
+```
+
+也可以直接运行模块调整参数：
+
+```bash
+python -m quant_futures_bot.altcoin_top_volume_backtest --top 100 --limit 500 --timeframes 15m,30m --show 30
+```
+
 ## 单次运行
 
 本地 paper 模式单次运行：

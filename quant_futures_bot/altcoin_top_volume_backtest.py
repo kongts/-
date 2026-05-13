@@ -1,0 +1,257 @@
+from __future__ import annotations
+
+import argparse
+import csv
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from statistics import mean
+
+import pandas as pd
+
+from .backtest import Backtester, BacktestResult
+from .data import MarketDataProvider
+from .indicators import add_indicators
+from .strategy_manager import StrategyManager
+
+
+DEFAULT_TIMEFRAMES = ["15m", "30m"]
+DEFAULT_STRATEGIES = ["alt_momentum_12", "alt_volume_breakout", "alt_volatility_breakout"]
+EXCLUDED_BASES = {
+    "BTC",
+    "ETH",
+    "USDC",
+    "FDUSD",
+    "TUSD",
+    "USDP",
+    "DAI",
+    "XAU",
+    "XAG",
+    "CL",
+    "NATGAS",
+    "PAXG",
+    "NVDA",
+    "TSLA",
+    "MSTR",
+    "AMD",
+    "INTC",
+    "EWY",
+}
+
+
+@dataclass
+class AltcoinBacktestScore:
+    rank: int
+    volume_rank: int
+    symbol: str
+    quote_volume: float
+    strategy_id: str
+    strategy_name: str
+    timeframe: str
+    return_pct: float
+    max_drawdown: float
+    sharpe: float
+    trade_count: int
+    win_rate: float
+    profit_factor: float
+    score: float
+
+
+def fetch_top_usdt_perpetuals(limit: int = 100, include_majors: bool = False) -> list[tuple[str, float]]:
+    import ccxt
+
+    exchange = ccxt.binanceusdm({"enableRateLimit": True, "options": {"defaultType": "future"}})
+    markets = exchange.load_markets()
+    tickers = exchange.fetch_tickers()
+    rows: list[tuple[str, float]] = []
+    for symbol, market in markets.items():
+        if not market.get("active", True):
+            continue
+        if not market.get("swap"):
+            continue
+        if market.get("quote") != "USDT":
+            continue
+        base = str(market.get("base") or "").upper()
+        if not include_majors and base in EXCLUDED_BASES:
+            continue
+        ticker = tickers.get(symbol, {})
+        quote_volume = first_float(
+            ticker.get("quoteVolume"),
+            ticker.get("info", {}).get("quoteVolume"),
+            ticker.get("info", {}).get("volume"),
+            0.0,
+        )
+        if quote_volume <= 0:
+            continue
+        rows.append((symbol, quote_volume))
+    rows.sort(key=lambda item: item[1], reverse=True)
+    return rows[:limit]
+
+
+def run_backtest(
+    symbol: str,
+    frame: pd.DataFrame,
+    strategy_id: str,
+    data_source: str,
+    max_margin_ratio: float,
+    leverage: int,
+    stop_loss_pct: float,
+    take_profit_pct: float,
+) -> BacktestResult:
+    symbol_configs = {
+        symbol: {
+            "symbol": symbol,
+            "enabled": True,
+            "leverage": leverage,
+            "max_margin_ratio": max_margin_ratio,
+        }
+    }
+    return Backtester(
+        strategy_id=strategy_id,
+        frames={symbol: frame.copy()},
+        data_sources={symbol: data_source},
+        symbol_configs=symbol_configs,
+        stop_loss_pct=stop_loss_pct,
+        take_profit_pct=take_profit_pct,
+    ).run()
+
+
+def score_result(result: BacktestResult) -> float:
+    if result.trade_count == 0:
+        return -999.0
+    trade_bonus = min(result.trade_count, 30) * 0.08
+    low_trade_penalty = 8.0 if result.trade_count < 4 else 0.0
+    drawdown_penalty = result.max_drawdown * 100 * 2.5
+    return result.return_pct + result.sharpe * 0.35 + trade_bonus - drawdown_penalty - low_trade_penalty
+
+
+def backtest_top_volume(
+    top: int,
+    timeframes: list[str],
+    strategies: list[str],
+    candle_limit: int,
+    include_majors: bool,
+    max_margin_ratio: float,
+    leverage: int,
+    stop_loss_pct: float,
+    take_profit_pct: float,
+) -> list[AltcoinBacktestScore]:
+    provider = MarketDataProvider(use_exchange=True, fallback_to_synthetic=False)
+    top_symbols = fetch_top_usdt_perpetuals(top, include_majors=include_majors)
+    scores: list[AltcoinBacktestScore] = []
+    volume_rank_by_symbol = {symbol: idx for idx, (symbol, _volume) in enumerate(top_symbols, start=1)}
+    quote_volume_by_symbol = dict(top_symbols)
+    for idx, (symbol, quote_volume) in enumerate(top_symbols, start=1):
+        print(f"fetching {idx}/{len(top_symbols)} {symbol} quote_volume={quote_volume:.0f}", flush=True)
+        for timeframe in timeframes:
+            frame = add_indicators(provider.fetch_ohlcv(symbol, timeframe=timeframe, limit=candle_limit))
+            data_source = provider.last_source_by_symbol.get(symbol, "exchange")
+            for strategy_id in strategies:
+                result = run_backtest(
+                    symbol,
+                    frame,
+                    strategy_id,
+                    data_source,
+                    max_margin_ratio,
+                    leverage,
+                    stop_loss_pct,
+                    take_profit_pct,
+                )
+                scores.append(
+                    AltcoinBacktestScore(
+                        rank=0,
+                        volume_rank=volume_rank_by_symbol[symbol],
+                        symbol=symbol,
+                        quote_volume=quote_volume_by_symbol[symbol],
+                        strategy_id=strategy_id,
+                        strategy_name=StrategyManager.available_strategy_names()[strategy_id],
+                        timeframe=timeframe,
+                        return_pct=result.return_pct,
+                        max_drawdown=result.max_drawdown,
+                        sharpe=result.sharpe,
+                        trade_count=result.trade_count,
+                        win_rate=result.win_rate,
+                        profit_factor=result.profit_factor,
+                        score=score_result(result),
+                    )
+                )
+    scores.sort(key=lambda item: item.score, reverse=True)
+    for rank, item in enumerate(scores, start=1):
+        item.rank = rank
+    return scores
+
+
+def write_csv(path: Path, rows: list[AltcoinBacktestScore]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(asdict(rows[0]).keys()))
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(asdict(row))
+
+
+def print_summary(rows: list[AltcoinBacktestScore], top_n: int) -> None:
+    print("altcoin top-volume aggressive strategy backtest")
+    for item in rows[:top_n]:
+        print(
+            f"{item.rank}. volume_rank={item.volume_rank} {item.symbol} "
+            f"{item.strategy_id}/{item.timeframe} return={item.return_pct:.2f}% "
+            f"dd={item.max_drawdown:.2%} sharpe={item.sharpe:.2f} trades={item.trade_count} "
+            f"win={item.win_rate:.0%} pf={item.profit_factor:.2f} score={item.score:.2f}"
+        )
+    positive = [item for item in rows if item.return_pct > 0 and item.trade_count > 0]
+    print(
+        f"tested={len(rows)} positive={len(positive)} "
+        f"avg_return={mean(item.return_pct for item in rows):.2f}%"
+    )
+
+
+def first_float(*values) -> float:
+    for value in values:
+        if value is None or value == "":
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Backtest aggressive strategies on top Binance USDT perpetuals by 24h volume")
+    parser.add_argument("--top", type=int, default=100, help="number of top-volume USDT perpetual symbols")
+    parser.add_argument("--limit", type=int, default=500, help="candles per symbol/timeframe")
+    parser.add_argument("--timeframes", default="15m,30m", help="comma-separated timeframes")
+    parser.add_argument("--strategies", default=",".join(DEFAULT_STRATEGIES), help="comma-separated strategy ids")
+    parser.add_argument("--include-majors", action="store_true", help="include BTC/ETH and stablecoin-like symbols")
+    parser.add_argument("--max-margin-ratio", type=float, default=0.03, help="margin ratio per symbol for backtest sizing")
+    parser.add_argument("--leverage", type=int, default=2, help="leverage for backtest sizing")
+    parser.add_argument("--stop-loss-pct", type=float, default=0.025, help="stop loss percentage, e.g. 0.025 = 2.5%%")
+    parser.add_argument("--take-profit-pct", type=float, default=0.06, help="take profit percentage, e.g. 0.06 = 6%%")
+    parser.add_argument("--show", type=int, default=30, help="number of rows to print")
+    parser.add_argument("--output", default="quant_futures_bot/data/altcoin_top_volume_backtest.csv", help="CSV output path")
+    args = parser.parse_args()
+
+    timeframes = [item.strip() for item in args.timeframes.split(",") if item.strip()]
+    strategies = [item.strip() for item in args.strategies.split(",") if item.strip()]
+    rows = backtest_top_volume(
+        top=args.top,
+        timeframes=timeframes,
+        strategies=strategies,
+        candle_limit=args.limit,
+        include_majors=args.include_majors,
+        max_margin_ratio=args.max_margin_ratio,
+        leverage=args.leverage,
+        stop_loss_pct=args.stop_loss_pct,
+        take_profit_pct=args.take_profit_pct,
+    )
+    if rows:
+        output = Path(args.output)
+        write_csv(output, rows)
+        print_summary(rows, args.show)
+        print(f"csv={output}")
+    else:
+        print("no symbols tested")
+
+
+if __name__ == "__main__":
+    main()

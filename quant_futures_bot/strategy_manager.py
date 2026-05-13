@@ -4,6 +4,11 @@ import pandas as pd
 
 from .events import SignalEvent
 from .selected_strategy import load_selected_strategy
+from .strategies.altcoin_momentum_strategy import (
+    ShortMomentumBreakoutStrategy,
+    VolatilityExpansionBreakoutStrategy,
+    VolumeBreakoutStrategy,
+)
 from .strategies.breakout_strategy import BreakoutStrategy
 from .strategies.ma_strategy import MAStrategy
 from .strategies.mean_reversion_strategy import MeanReversionStrategy
@@ -16,6 +21,9 @@ class StrategyManager:
         self.rsi_strategy = RSIStrategy()
         self.breakout_20 = BreakoutStrategy(20)
         self.breakout_40 = BreakoutStrategy(40)
+        self.alt_momentum_12 = ShortMomentumBreakoutStrategy(12)
+        self.alt_volume_breakout = VolumeBreakoutStrategy(20, 2.0)
+        self.alt_volatility_breakout = VolatilityExpansionBreakoutStrategy(20, 1.5)
         self.mean_reversion_20 = MeanReversionStrategy(20, 2.0)
         self.mean_reversion_30 = MeanReversionStrategy(30, 2.0)
         self.use_saved_selection = use_saved_selection
@@ -33,6 +41,12 @@ class StrategyManager:
             return self.breakout_20.generate(symbol, df, current_side)
         if strategy_id == "breakout_40":
             return self.breakout_40.generate(symbol, df, current_side)
+        if strategy_id == "alt_momentum_12":
+            return self.alt_momentum_12.generate(symbol, df, current_side)
+        if strategy_id == "alt_volume_breakout":
+            return self.alt_volume_breakout.generate(symbol, df, current_side)
+        if strategy_id == "alt_volatility_breakout":
+            return self.alt_volatility_breakout.generate(symbol, df, current_side)
         if strategy_id == "mean_reversion_20":
             return self.mean_reversion_20.generate(symbol, df, current_side)
         if strategy_id == "mean_reversion_30":
@@ -67,6 +81,9 @@ class StrategyManager:
             "rsi_range",
             "breakout_20",
             "breakout_40",
+            "alt_momentum_12",
+            "alt_volume_breakout",
+            "alt_volatility_breakout",
             "mean_reversion_20",
             "mean_reversion_30",
         ]
@@ -79,6 +96,9 @@ class StrategyManager:
             "rsi_range": "RSI Range",
             "breakout_20": "Breakout 20",
             "breakout_40": "Breakout 40",
+            "alt_momentum_12": "Alt Momentum Breakout 12",
+            "alt_volume_breakout": "Alt Volume Breakout 20/2x",
+            "alt_volatility_breakout": "Alt Volatility Expansion Breakout 20/1.5x",
             "mean_reversion_20": "Mean Reversion 20/2",
             "mean_reversion_30": "Mean Reversion 30/2",
         }
