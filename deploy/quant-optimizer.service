@@ -1,0 +1,11 @@
+[Unit]
+Description=Quant Futures Strategy Optimizer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/quant-futures-bot
+EnvironmentFile=/opt/quant-futures-bot/.env
+ExecStart=/opt/quant-futures-bot/.venv/bin/python -m quant_futures_bot.strategy_optimizer
+

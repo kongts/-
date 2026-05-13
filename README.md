@@ -344,3 +344,23 @@ SQLite 数据库里包含：
 - `error_logs`：错误记录
 
 `state.json` 可以直接打开查看当前账户状态、持仓、系统状态、最大回撤、连续亏损次数等信息。
+
+## 云服务器部署
+
+Ubuntu 部署说明和 systemd 服务模板在：
+
+```text
+deploy/README_ubuntu.md
+```
+
+推荐部署方式：
+
+- `quant-monitor.service`：长期运行 Testnet 实时盯盘
+- `quant-optimizer.timer`：每 4 小时自动回测优化策略
+
+服务器部署前先确认能访问 Binance：
+
+```bash
+curl https://testnet.binancefuture.com/fapi/v1/time
+curl https://fapi.binance.com/fapi/v1/time
+```

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Quant Futures Strategy Optimizer Every 4 Hours
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=4h
+Unit=quant-optimizer.service
+
+[Install]
+WantedBy=timers.target
+
