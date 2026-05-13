@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import argparse
-import time
 from datetime import datetime
 
 from . import config
@@ -45,37 +43,3 @@ def print_cycle_summary(system: TradingSystem, cycle: int) -> None:
         f"data_source={format_sources(system)}",
         flush=True,
     )
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Continuously monitor market signals and execute current strategy")
-    parser.add_argument("--offline", action="store_true", help="use synthetic market data")
-    parser.add_argument("--poll-seconds", type=int, default=60, help="seconds between market checks")
-    parser.add_argument("--max-cycles", type=int, default=0, help="stop after N cycles; 0 means run forever")
-    args = parser.parse_args()
-
-    poll_seconds = max(10, args.poll_seconds)
-    system = TradingSystem(use_exchange=not args.offline)
-    cycle = 0
-    print(
-        f"live monitor started execution_mode={config.EXECUTION_MODE} "
-        f"poll_seconds={poll_seconds} max_cycles={args.max_cycles or 'forever'}",
-        flush=True,
-    )
-    while True:
-        cycle += 1
-        try:
-            system.run_cycle()
-            print_cycle_summary(system, cycle)
-        except KeyboardInterrupt:
-            print("live monitor stopped by user", flush=True)
-            break
-        except Exception as exc:
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] monitor_error={exc}", flush=True)
-        if args.max_cycles and cycle >= args.max_cycles:
-            break
-        time.sleep(poll_seconds)
-
-
-if __name__ == "__main__":
-    main()

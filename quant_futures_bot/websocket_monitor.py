@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import websocket
 
 from . import config
-from .live_monitor import print_cycle_summary
+from .monitor_output import print_cycle_summary
 from .symbol_config import enabled_symbols
 from .trading_system import TradingSystem
 
@@ -156,7 +156,7 @@ class WebSocketMonitor:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Monitor Binance Futures prices with WebSocket and run strategy on kline close")
+    parser = argparse.ArgumentParser(description="Monitor Binance Futures prices with WebSocket and run strategy on timeframe close")
     parser.add_argument("--print-seconds", type=int, default=5, help="seconds between real-time price prints")
     parser.add_argument("--reconnect-seconds", type=int, default=5, help="seconds to wait before reconnecting")
     parser.add_argument("--no-initial-cycle", action="store_true", help="do not run strategy immediately on startup")

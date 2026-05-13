@@ -6,41 +6,7 @@
 /opt/quant-futures-bot
 ```
 
-## 1. 安装依赖
-
-```bash
-sudo apt update
-sudo apt install -y git python3 python3-venv python3-pip curl
-```
-
-## 2. 测试服务器能否访问 Binance
-
-```bash
-curl https://testnet.binancefuture.com/fapi/v1/time
-curl https://fapi.binance.com/fapi/v1/time
-```
-
-## WebSocket 实时盯盘服务
-
-如果要把 60 秒轮询监控切换为 WebSocket 实时盯盘：
-
-```bash
-cd /opt/quant-futures-bot
-git pull
-/opt/miniconda/envs/quant-bot/bin/pip install -r requirements.txt
-
-sudo cp deploy/quant-websocket.service /etc/systemd/system/quant-websocket.service
-sudo systemctl daemon-reload
-sudo systemctl stop quant-monitor.service
-sudo systemctl enable --now quant-websocket.service
-journalctl -u quant-websocket.service -f
-```
-
-WebSocket 服务会实时打印 `websocket_tick` 价格心跳，并在 4H/6H 周期换线时打印 `timeframe_closed`，随后触发一轮 `strategy_cycle`。
-
-能返回 `serverTime` 才继续部署。
-
-## 3. 拉取项目
+## 1. 拉取项目
 
 ```bash
 sudo mkdir -p /opt/quant-futures-bot
@@ -49,7 +15,18 @@ git clone https://github.com/kongts/-.git /opt/quant-futures-bot
 cd /opt/quant-futures-bot
 ```
 
-## 4. 创建 Python 环境
+## 2. 安装 Python 环境
+
+如果服务器使用 conda：
+
+```bash
+source /opt/miniconda/etc/profile.d/conda.sh
+conda create -n quant-bot python=3.11 -y
+conda activate quant-bot
+pip install -r requirements.txt
+```
+
+如果使用 venv：
 
 ```bash
 python3 -m venv .venv
@@ -58,7 +35,7 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-## 5. 配置 Testnet API
+## 3. 配置 Testnet API
 
 不要把真实 key 提交到 Git。服务器上创建 `.env`：
 
@@ -75,36 +52,42 @@ BINANCE_TESTNET_API_KEY=你的testnet_key
 BINANCE_TESTNET_API_SECRET=你的testnet_secret
 ```
 
-## 6. 手动测试
-
-先优化策略：
+## 4. 测试 Binance 网络
 
 ```bash
-source .venv/bin/activate
+curl https://testnet.binancefuture.com/fapi/v1/time
+curl https://fapi.binance.com/fapi/v1/time
+```
+
+能返回 `serverTime` 再继续。
+
+## 5. 手动测试
+
+```bash
+cd /opt/quant-futures-bot
+source /opt/miniconda/etc/profile.d/conda.sh
+conda activate quant-bot
+set -a; source .env; set +a
+
 python -m quant_futures_bot.strategy_optimizer
+python -m quant_futures_bot.websocket_monitor --print-seconds 5
 ```
 
-再跑一轮盯盘：
+看到 `websocket_tick` 说明实时行情已接通。看到 `execution_mode=testnet` 说明 Testnet 配置已生效。
+
+## 6. 安装 systemd 服务
 
 ```bash
-python -m quant_futures_bot.live_monitor --max-cycles 1 --poll-seconds 10
-```
-
-看到 `execution_mode=testnet`，说明配置生效。
-
-## 7. 安装 systemd 服务
-
-```bash
-sudo cp deploy/quant-monitor.service /etc/systemd/system/
-sudo cp deploy/quant-optimizer.service /etc/systemd/system/
-sudo cp deploy/quant-optimizer.timer /etc/systemd/system/
+sudo cp deploy/quant-websocket.service /etc/systemd/system/quant-websocket.service
+sudo cp deploy/quant-optimizer.service /etc/systemd/system/quant-optimizer.service
+sudo cp deploy/quant-optimizer.timer /etc/systemd/system/quant-optimizer.timer
 sudo systemctl daemon-reload
 ```
 
-启动实时盯盘：
+启动 WebSocket 盯盘：
 
 ```bash
-sudo systemctl enable --now quant-monitor.service
+sudo systemctl enable --now quant-websocket.service
 ```
 
 启动每 4 小时自动优化：
@@ -113,17 +96,12 @@ sudo systemctl enable --now quant-monitor.service
 sudo systemctl enable --now quant-optimizer.timer
 ```
 
-## 8. 查看运行状态
+## 7. 查看状态和日志
 
 ```bash
-sudo systemctl status quant-monitor.service
+sudo systemctl status quant-websocket.service
 sudo systemctl status quant-optimizer.timer
-```
-
-查看实时日志：
-
-```bash
-journalctl -u quant-monitor.service -f
+journalctl -u quant-websocket.service -f
 ```
 
 查看优化器日志：
@@ -132,19 +110,18 @@ journalctl -u quant-monitor.service -f
 journalctl -u quant-optimizer.service -n 100
 ```
 
-## 9. 停止服务
+## 8. 停止服务
 
 ```bash
-sudo systemctl stop quant-monitor.service
+sudo systemctl stop quant-websocket.service
 sudo systemctl stop quant-optimizer.timer
 ```
 
-## 10. 更新项目
+## 9. 更新项目
 
 ```bash
 cd /opt/quant-futures-bot
 git pull
-source .venv/bin/activate
-pip install -r requirements.txt
-sudo systemctl restart quant-monitor.service
+/opt/miniconda/envs/quant-bot/bin/pip install -r requirements.txt
+sudo systemctl restart quant-websocket.service
 ```
