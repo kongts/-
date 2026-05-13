@@ -84,6 +84,10 @@ quant_futures_bot/data/altcoin_strategy_latest.json
 - 卖单价格约高于信号价 `0.1%`。
 - 挂单提交后不会立刻记为本地成交。
 - 是否成交以交易所测试盘实际订单和持仓为准。
+- 每轮会先同步交易所余额、持仓、未成交挂单，再决定是否继续下单。
+- 开仓挂单超过 `180` 秒未成交会撤单，信号仍有效才会在后续周期重挂。
+- 平仓挂单超过 `60` 秒未成交会撤单并重新评估，平仓优先级高于开仓。
+- 同一币种连续 `3` 次挂单失败会暂停该币种，避免一直刷单。
 
 本地手动运行一次：
 
@@ -117,28 +121,28 @@ cat quant_futures_bot/data/altcoin_testnet_latest.json
 cat quant_futures_bot/data/altcoin_testnet_state.json
 ```
 
-## 瀑布行情风控
+## 瀑布预警风控
 
-山寨币模块现在有 crash mode：
+山寨币模块现在有 crash watch：
 
-- 默认判断：本轮交易币种里，至少 `60%` 的币最近 4 根 K 线跌幅达到 `8%`，进入瀑布模式。
+- 默认判断：本轮交易币种里，至少 `60%` 的币最近 4 根 K 线跌幅达到 `3%`，进入瀑布预警。
 - 普通模式：空单达到 `6%` 浮盈会固定止盈。
-- 瀑布模式：空单不再按 `6%` 固定止盈，而是启用 `3%` 追踪止盈。
+- 瀑布预警：空单不再按 `6%` 固定止盈，而是提前启用 `3%` 追踪止盈。
 - 也就是说，空单继续盈利时会继续持有；从最大浮盈回撤超过 `3%` 时，才挂单平空。
 - 止损仍然保留，默认亏损 `2.5%` 会触发平仓信号。
 
 相关参数：
 
 ```bash
---crash-drop-pct 0.08
---crash-breadth-ratio 0.6
+--crash-watch-drop-pct 0.03
+--crash-watch-breadth-ratio 0.6
 --crash-short-trailing-pct 0.03
 ```
 
-日志出现下面内容，表示进入瀑布模式：
+日志出现下面内容，表示进入瀑布预警：
 
 ```text
-crash_mode=ON symbols=5 avg_recent_drop=-10.25% trigger_drop=8.00% short_trailing=3.00%
+crash_watch=ON symbols=5 avg_recent_drop=-4.25% trigger_drop=3.00% short_trailing=3.00%
 ```
 
 ## 山寨币 Paper 模拟

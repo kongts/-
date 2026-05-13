@@ -140,6 +140,12 @@ class BinanceTestnetExecution:
             params=params,
         )
 
+    def fetch_order(self, order_id: str, symbol: str) -> dict:
+        return self.exchange.fetch_order(order_id, symbol)
+
+    def cancel_order(self, order_id: str, symbol: str) -> dict:
+        return self.exchange.cancel_order(order_id, symbol)
+
     def _limit_price(self, order: OrderEvent, maker_offset: float) -> float:
         raw_price = order.price
         if order.side.upper() == "BUY":

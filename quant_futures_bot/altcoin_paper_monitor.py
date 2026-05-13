@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .account_sync import BinanceAccountSync
@@ -38,9 +38,12 @@ class AltcoinPaperMonitor:
         leverage: int = 2,
         stop_loss_pct: float = 0.025,
         take_profit_pct: float = 0.06,
-        crash_drop_pct: float = 0.08,
-        crash_breadth_ratio: float = 0.6,
+        crash_watch_drop_pct: float = 0.03,
+        crash_watch_breadth_ratio: float = 0.6,
         crash_short_trailing_pct: float = 0.03,
+        open_order_timeout_seconds: int = 180,
+        close_order_timeout_seconds: int = 60,
+        max_order_failures: int = 3,
         execution_mode: str = "paper",
         confirm_exchange_orders: str = "",
         order_type: str = "market",
@@ -73,13 +76,19 @@ class AltcoinPaperMonitor:
         self.leverage = leverage
         self.stop_loss_pct = stop_loss_pct
         self.take_profit_pct = take_profit_pct
-        self.crash_drop_pct = crash_drop_pct
-        self.crash_breadth_ratio = crash_breadth_ratio
+        self.crash_watch_drop_pct = crash_watch_drop_pct
+        self.crash_watch_breadth_ratio = crash_watch_breadth_ratio
         self.crash_short_trailing_pct = crash_short_trailing_pct
+        self.open_order_timeout_seconds = open_order_timeout_seconds
+        self.close_order_timeout_seconds = close_order_timeout_seconds
+        self.max_order_failures = max_order_failures
         self.data_provider = MarketDataProvider(use_exchange=True, fallback_to_synthetic=False)
         self.portfolio = self.load_portfolio()
         runtime_state = self.load_runtime_state()
         self.short_trailing_peaks: dict[str, float] = dict(runtime_state.get("short_trailing_peaks", {}))
+        self.pending_orders: dict[str, dict] = dict(runtime_state.get("pending_orders", {}))
+        self.order_failures: dict[str, int] = dict(runtime_state.get("order_failures", {}))
+        self.paused_symbols: dict[str, str] = dict(runtime_state.get("paused_symbols", {}))
         self.pause_manager = PauseManager()
         self.execution = BinanceTestnetExecution() if execution_mode == "testnet" else PaperExecution()
         self.account_sync = BinanceAccountSync(self.execution.exchange) if isinstance(self.execution, BinanceTestnetExecution) else None
@@ -91,7 +100,10 @@ class AltcoinPaperMonitor:
         leaders = self.load_leaders()
         cycle_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.log(f"[{cycle_started_at}] start altcoin {self.execution_mode} cycle leaders={len(leaders)} top={self.top}")
-        self.sync_exchange_account([leader["symbol"] for leader in leaders[: self.top]])
+        sync_symbols = sorted({leader["symbol"] for leader in leaders[: self.top]} | set(self.pending_orders))
+        self.sync_exchange_account(sync_symbols)
+        self.manage_pending_orders()
+        self.sync_exchange_account(sync_symbols)
         signals_created = 0
         orders_created = 0
         fills_created = 0
@@ -119,13 +131,13 @@ class AltcoinPaperMonitor:
                 )
             except Exception as exc:
                 self.log(f"symbol_error symbol={symbol} strategy={strategy_id}/{timeframe} error={exc}")
-        crash_mode = self.detect_crash_mode(market_contexts)
-        if crash_mode:
+        crash_watch = self.detect_crash_watch(market_contexts)
+        if crash_watch:
             drops = [context["recent_drop"] for context in market_contexts if context["recent_drop"] is not None]
             avg_drop = sum(drops) / len(drops) if drops else 0.0
             self.log(
-                f"crash_mode=ON symbols={len(drops)} avg_recent_drop={avg_drop:.2%} "
-                f"trigger_drop={self.crash_drop_pct:.2%} short_trailing={self.crash_short_trailing_pct:.2%}"
+                f"crash_watch=ON symbols={len(drops)} avg_recent_drop={avg_drop:.2%} "
+                f"trigger_drop={self.crash_watch_drop_pct:.2%} short_trailing={self.crash_short_trailing_pct:.2%}"
             )
         for context in market_contexts:
             symbol = context["symbol"]
@@ -135,7 +147,13 @@ class AltcoinPaperMonitor:
                 frame = context["frame"]
                 price = context["price"]
                 latest_row = context["latest_row"]
-                exit_signal = self.stop_or_take_profit_signal(symbol, price, crash_mode)
+                if symbol in self.paused_symbols:
+                    self.log(f"symbol_paused symbol={symbol} reason={self.paused_symbols[symbol]}")
+                    continue
+                if symbol in self.pending_orders:
+                    self.log(f"pending_order_wait symbol={symbol} exchange_order_id={self.pending_orders[symbol].get('exchange_order_id', '-')}")
+                    continue
+                exit_signal = self.stop_or_take_profit_signal(symbol, price, crash_watch)
                 if exit_signal is not None:
                     ok, filled, order_ids = self.execute_signal(exit_signal, latest_row)
                     signals_created += 1
@@ -166,6 +184,7 @@ class AltcoinPaperMonitor:
             f"unrealized={self.portfolio.unrealized_pnl:.2f} realized={self.portfolio.realized_pnl:.2f} "
             f"signals={signals_created} orders={orders_created} fills={fills_created} rejected={rejected} order_type={self.order_type} "
             f"exchange_order_ids={','.join(exchange_order_ids) or '-'} exchange_open_orders={self.exchange_open_order_count} "
+            f"pending_orders={len(self.pending_orders)} paused_symbols={len(self.paused_symbols)} "
             f"exchange_positions={self.exchange_positions_summary} positions={self.format_positions()}"
         )
 
@@ -180,6 +199,12 @@ class AltcoinPaperMonitor:
         self.exchange_positions_summary = self.format_exchange_positions(snapshot.positions or {})
 
     def execute_signal(self, signal: SignalEvent, latest_row: dict) -> tuple[bool, bool, list[str]]:
+        if signal.symbol in self.paused_symbols:
+            self.log(f"signal_rejected symbol={signal.symbol} signal={signal.signal_type.value} reason=symbol paused")
+            return False, False, []
+        if signal.symbol in self.pending_orders:
+            self.log(f"signal_rejected symbol={signal.symbol} signal={signal.signal_type.value} reason=pending order exists")
+            return False, False, []
         symbol_configs = {
             signal.symbol: {
                 "symbol": signal.symbol,
@@ -207,6 +232,8 @@ class AltcoinPaperMonitor:
                 post_only=True,
             )
             exchange_order_id = str(response.get("id") or response.get("orderId") or "")
+            if exchange_order_id:
+                self.record_pending_order(submitted, exchange_order_id)
             self.log(
                 f"testnet_order symbol={submitted.symbol} action={submitted.position_action.value} type=limit "
                 f"side={submitted.side} qty={submitted.qty:.8f} signal_price={submitted.price:.6f} "
@@ -226,7 +253,7 @@ class AltcoinPaperMonitor:
         )
         return True, True, [fill.exchange_order_id] if fill.exchange_order_id else []
 
-    def stop_or_take_profit_signal(self, symbol: str, price: float, crash_mode: bool) -> SignalEvent | None:
+    def stop_or_take_profit_signal(self, symbol: str, price: float, crash_watch: bool) -> SignalEvent | None:
         pos = self.portfolio.get_position(symbol)
         if not pos.is_open() or pos.entry_price <= 0:
             self.short_trailing_peaks.pop(symbol, None)
@@ -241,7 +268,7 @@ class AltcoinPaperMonitor:
         if change <= -self.stop_loss_pct:
             self.short_trailing_peaks.pop(symbol, None)
             return SignalEvent(symbol, close_type, "Altcoin Paper Stop Loss", price)
-        if pos.position_side == "SHORT" and crash_mode:
+        if pos.position_side == "SHORT" and crash_watch:
             peak = max(self.short_trailing_peaks.get(symbol, change), change)
             self.short_trailing_peaks[symbol] = peak
             pullback = peak - change
@@ -263,13 +290,110 @@ class AltcoinPaperMonitor:
             return None
         return latest / previous - 1
 
-    def detect_crash_mode(self, market_contexts: list[dict]) -> bool:
+    def detect_crash_watch(self, market_contexts: list[dict]) -> bool:
         drops = [context["recent_drop"] for context in market_contexts if context["recent_drop"] is not None]
         if not drops:
             return False
-        severe_count = sum(1 for drop in drops if drop <= -self.crash_drop_pct)
+        severe_count = sum(1 for drop in drops if drop <= -self.crash_watch_drop_pct)
         breadth = severe_count / len(drops)
-        return breadth >= self.crash_breadth_ratio
+        return breadth >= self.crash_watch_breadth_ratio
+
+    def manage_pending_orders(self) -> None:
+        if not isinstance(self.execution, BinanceTestnetExecution):
+            return
+        now = datetime.now(timezone.utc)
+        for symbol, pending in list(self.pending_orders.items()):
+            exchange_order_id = str(pending.get("exchange_order_id") or "")
+            if not exchange_order_id:
+                self.pending_orders.pop(symbol, None)
+                continue
+            try:
+                order = self.execution.fetch_order(exchange_order_id, symbol)
+            except Exception as exc:
+                self.log(f"pending_order_check_error symbol={symbol} exchange_order_id={exchange_order_id} error={exc}")
+                continue
+            status = str(order.get("status") or "").lower()
+            filled = self._first_float(order.get("filled"), 0.0)
+            remaining = self._first_float(order.get("remaining"), pending.get("qty"), 0.0)
+            if status in {"closed", "filled"} or (filled > 0 and remaining <= 1e-12):
+                self.log(
+                    f"pending_order_filled symbol={symbol} exchange_order_id={exchange_order_id} "
+                    f"status={status or '-'} filled={filled:.8f}"
+                )
+                self.pending_orders.pop(symbol, None)
+                self.order_failures.pop(symbol, None)
+                continue
+            if status in {"canceled", "cancelled", "expired", "rejected"}:
+                self.log(
+                    f"pending_order_failed symbol={symbol} exchange_order_id={exchange_order_id} "
+                    f"status={status or '-'} filled={filled:.8f}"
+                )
+                self.pending_orders.pop(symbol, None)
+                self.record_order_failure(symbol, f"order {status or 'failed'}")
+                continue
+            created_at = self.parse_datetime(str(pending.get("created_at") or ""))
+            age = (now - created_at).total_seconds() if created_at else 0
+            timeout = self.close_order_timeout_seconds if self.is_close_action(str(pending.get("action") or "")) else self.open_order_timeout_seconds
+            if age < timeout:
+                continue
+            try:
+                self.execution.cancel_order(exchange_order_id, symbol)
+                self.log(
+                    f"pending_order_timeout_cancelled symbol={symbol} exchange_order_id={exchange_order_id} "
+                    f"action={pending.get('action', '-')} age_seconds={age:.0f} timeout_seconds={timeout} filled={filled:.8f}"
+                )
+            except Exception as exc:
+                self.log(f"pending_order_cancel_error symbol={symbol} exchange_order_id={exchange_order_id} error={exc}")
+            self.pending_orders.pop(symbol, None)
+            self.record_order_failure(symbol, "timeout")
+
+    def record_pending_order(self, order, exchange_order_id: str) -> None:
+        self.pending_orders[order.symbol] = {
+            "exchange_order_id": exchange_order_id,
+            "symbol": order.symbol,
+            "action": order.position_action.value,
+            "side": order.side,
+            "qty": order.qty,
+            "signal_price": order.price,
+            "reduce_only": order.reduce_only,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def record_order_failure(self, symbol: str, reason: str) -> None:
+        failures = int(self.order_failures.get(symbol, 0)) + 1
+        self.order_failures[symbol] = failures
+        if failures >= self.max_order_failures:
+            self.paused_symbols[symbol] = f"order failures reached {failures}: {reason}"
+            self.log(f"symbol_paused symbol={symbol} failures={failures} reason={reason}")
+        else:
+            self.log(f"order_failure symbol={symbol} failures={failures}/{self.max_order_failures} reason={reason}")
+
+    @staticmethod
+    def is_close_action(action: str) -> bool:
+        return action in {SignalType.CLOSE_LONG.value, SignalType.CLOSE_SHORT.value, SignalType.CLOSE_POSITION.value}
+
+    @staticmethod
+    def parse_datetime(value: str) -> datetime | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    @staticmethod
+    def _first_float(*values) -> float:
+        for value in values:
+            if value is None or value == "":
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
 
     def load_leaders(self) -> list[dict]:
         if not self.strategy_path.exists():
@@ -309,6 +433,9 @@ class AltcoinPaperMonitor:
         payload = {
             "updated_at": datetime.now().isoformat(timespec="seconds"),
             "short_trailing_peaks": self.short_trailing_peaks,
+            "pending_orders": self.pending_orders,
+            "order_failures": self.order_failures,
+            "paused_symbols": self.paused_symbols,
         }
         self.runtime_state_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -337,9 +464,12 @@ class AltcoinPaperMonitor:
             "exchange_order_ids": exchange_order_ids,
             "exchange_open_order_count": self.exchange_open_order_count,
             "exchange_positions_summary": self.exchange_positions_summary,
+            "pending_orders": self.pending_orders,
+            "order_failures": self.order_failures,
+            "paused_symbols": self.paused_symbols,
             "order_type": self.order_type,
-            "crash_drop_pct": self.crash_drop_pct,
-            "crash_breadth_ratio": self.crash_breadth_ratio,
+            "crash_watch_drop_pct": self.crash_watch_drop_pct,
+            "crash_watch_breadth_ratio": self.crash_watch_breadth_ratio,
             "crash_short_trailing_pct": self.crash_short_trailing_pct,
             "short_trailing_peaks": self.short_trailing_peaks,
             "fee_rate": FEE_RATE,
@@ -387,9 +517,12 @@ def main() -> None:
     parser.add_argument("--leverage", type=int, default=2, help="paper leverage")
     parser.add_argument("--stop-loss-pct", type=float, default=0.025, help="stop loss percentage")
     parser.add_argument("--take-profit-pct", type=float, default=0.06, help="take profit percentage")
-    parser.add_argument("--crash-drop-pct", type=float, default=0.08, help="recent drop percentage that counts as crash")
-    parser.add_argument("--crash-breadth-ratio", type=float, default=0.6, help="ratio of traded symbols that must crash")
-    parser.add_argument("--crash-short-trailing-pct", type=float, default=0.03, help="short trailing take profit pullback in crash mode")
+    parser.add_argument("--crash-watch-drop-pct", type=float, default=0.03, help="recent drop percentage that enables short trailing")
+    parser.add_argument("--crash-watch-breadth-ratio", type=float, default=0.6, help="ratio of traded symbols that must drop")
+    parser.add_argument("--crash-short-trailing-pct", type=float, default=0.03, help="short trailing take profit pullback in crash watch")
+    parser.add_argument("--open-order-timeout-seconds", type=int, default=180, help="cancel unfilled opening limit orders after this many seconds")
+    parser.add_argument("--close-order-timeout-seconds", type=int, default=60, help="cancel unfilled closing limit orders after this many seconds")
+    parser.add_argument("--max-order-failures", type=int, default=3, help="pause a symbol after this many consecutive order failures")
     parser.add_argument("--execution-mode", choices=["paper", "testnet"], default="paper", help="paper or Binance testnet execution")
     parser.add_argument("--confirm-exchange-orders", default="", help="set to YES to allow testnet exchange orders")
     parser.add_argument("--order-type", choices=["market", "limit"], default="market", help="market or post-only limit orders")
@@ -403,9 +536,12 @@ def main() -> None:
         leverage=args.leverage,
         stop_loss_pct=args.stop_loss_pct,
         take_profit_pct=args.take_profit_pct,
-        crash_drop_pct=args.crash_drop_pct,
-        crash_breadth_ratio=args.crash_breadth_ratio,
+        crash_watch_drop_pct=args.crash_watch_drop_pct,
+        crash_watch_breadth_ratio=args.crash_watch_breadth_ratio,
         crash_short_trailing_pct=args.crash_short_trailing_pct,
+        open_order_timeout_seconds=args.open_order_timeout_seconds,
+        close_order_timeout_seconds=args.close_order_timeout_seconds,
+        max_order_failures=args.max_order_failures,
         execution_mode=args.execution_mode,
         confirm_exchange_orders=args.confirm_exchange_orders,
         order_type=args.order_type,

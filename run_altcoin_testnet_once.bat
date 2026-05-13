@@ -14,4 +14,4 @@ if "%BINANCE_TESTNET_API_SECRET%"=="" (
   exit /b 1
 )
 set "EXECUTION_MODE=testnet"
-"%PYTHON_EXE%" -m quant_futures_bot.altcoin_paper_monitor --run-once --top 5 --execution-mode testnet --confirm-exchange-orders YES --order-type limit --maker-offset 0.001 --crash-drop-pct 0.08 --crash-breadth-ratio 0.6 --crash-short-trailing-pct 0.03
+"%PYTHON_EXE%" -m quant_futures_bot.altcoin_paper_monitor --run-once --top 5 --execution-mode testnet --confirm-exchange-orders YES --order-type limit --maker-offset 0.001 --crash-watch-drop-pct 0.03 --crash-watch-breadth-ratio 0.6 --crash-short-trailing-pct 0.03 --open-order-timeout-seconds 180 --close-order-timeout-seconds 60 --max-order-failures 3

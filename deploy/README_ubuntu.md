@@ -87,6 +87,10 @@ tail -f /opt/quant-futures-bot/quant_futures_bot/logs/altcoin_strategy.log
 - post-only 提交，避免直接吃单
 - 买单低于信号价约 `0.1%`
 - 卖单高于信号价约 `0.1%`
+- 每轮先同步交易所余额、持仓、未成交挂单。
+- 开仓挂单超过 `180` 秒未成交会撤单。
+- 平仓挂单超过 `60` 秒未成交会撤单并重新评估。
+- 同一币种连续 `3` 次挂单失败会暂停该币种。
 
 启动每 15 分钟运行一次：
 
@@ -97,7 +101,7 @@ sudo systemctl enable --now quant-altcoin-testnet.timer
 手动运行一次：
 
 ```bash
-/opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.altcoin_paper_monitor --run-once --top 5 --candle-limit 220 --execution-mode testnet --confirm-exchange-orders YES --order-type limit --maker-offset 0.001
+/opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.altcoin_paper_monitor --run-once --top 5 --candle-limit 220 --execution-mode testnet --confirm-exchange-orders YES --order-type limit --maker-offset 0.001 --crash-watch-drop-pct 0.03 --crash-watch-breadth-ratio 0.6 --crash-short-trailing-pct 0.03 --open-order-timeout-seconds 180 --close-order-timeout-seconds 60 --max-order-failures 3
 ```
 
 查看挂单日志：
@@ -115,20 +119,20 @@ testnet_order ... type=limit ... status=submitted post_only=YES
 
 表示已经向交易所测试盘提交限价挂单。
 
-## 瀑布模式
+## 瀑布预警
 
 山寨币模块默认使用：
 
 ```bash
---crash-drop-pct 0.08
---crash-breadth-ratio 0.6
+--crash-watch-drop-pct 0.03
+--crash-watch-breadth-ratio 0.6
 --crash-short-trailing-pct 0.03
 ```
 
 含义：
 
-- 至少 `60%` 的交易币种最近 4 根 K 线跌超 `8%`，进入 crash mode。
-- crash mode 下，空单不按固定 `6%` 止盈。
+- 至少 `60%` 的交易币种最近 4 根 K 线跌超 `3%`，进入 crash watch。
+- crash watch 下，空单不按固定 `6%` 止盈。
 - 空单继续下跌就继续持有。
 - 从最大浮盈回撤 `3%` 时，才挂单平空。
 - 止损仍然保留。
