@@ -22,6 +22,7 @@ from .strategy_manager import StrategyManager
 DEFAULT_STRATEGY_PATH = DATA_DIR / "altcoin_strategy_latest.json"
 DEFAULT_STATE_PATH = DATA_DIR / "altcoin_paper_state.json"
 DEFAULT_LATEST_PATH = DATA_DIR / "altcoin_paper_latest.json"
+DEFAULT_RUNTIME_STATE_PATH = DATA_DIR / "altcoin_paper_runtime_state.json"
 
 
 class AltcoinPaperMonitor:
@@ -36,6 +37,9 @@ class AltcoinPaperMonitor:
         leverage: int = 2,
         stop_loss_pct: float = 0.025,
         take_profit_pct: float = 0.06,
+        crash_drop_pct: float = 0.08,
+        crash_breadth_ratio: float = 0.6,
+        crash_short_trailing_pct: float = 0.03,
         execution_mode: str = "paper",
         confirm_exchange_orders: str = "",
         order_type: str = "market",
@@ -52,9 +56,13 @@ class AltcoinPaperMonitor:
         if execution_mode == "testnet":
             state_path = DATA_DIR / "altcoin_testnet_state.json"
             latest_path = DATA_DIR / "altcoin_testnet_latest.json"
+            runtime_state_path = DATA_DIR / "altcoin_testnet_runtime_state.json"
+        else:
+            runtime_state_path = DEFAULT_RUNTIME_STATE_PATH
         self.strategy_path = strategy_path
         self.state_path = state_path
         self.latest_path = latest_path
+        self.runtime_state_path = runtime_state_path
         self.execution_mode = execution_mode
         self.order_type = order_type
         self.maker_offset = maker_offset
@@ -64,8 +72,13 @@ class AltcoinPaperMonitor:
         self.leverage = leverage
         self.stop_loss_pct = stop_loss_pct
         self.take_profit_pct = take_profit_pct
+        self.crash_drop_pct = crash_drop_pct
+        self.crash_breadth_ratio = crash_breadth_ratio
+        self.crash_short_trailing_pct = crash_short_trailing_pct
         self.data_provider = MarketDataProvider(use_exchange=True, fallback_to_synthetic=False)
         self.portfolio = self.load_portfolio()
+        runtime_state = self.load_runtime_state()
+        self.short_trailing_peaks: dict[str, float] = dict(runtime_state.get("short_trailing_peaks", {}))
         self.pause_manager = PauseManager()
         self.execution = BinanceTestnetExecution() if execution_mode == "testnet" else PaperExecution()
         self.order_manager = OrderManager()
@@ -79,6 +92,7 @@ class AltcoinPaperMonitor:
         fills_created = 0
         rejected = 0
         exchange_order_ids: list[str] = []
+        market_contexts: list[dict] = []
         for leader in leaders[: self.top]:
             symbol = leader["symbol"]
             strategy_id = leader["strategy_id"]
@@ -86,9 +100,37 @@ class AltcoinPaperMonitor:
             try:
                 frame = add_indicators(self.data_provider.fetch_ohlcv(symbol, timeframe=timeframe, limit=self.candle_limit))
                 price = float(frame.iloc[-1]["close"])
-                latest_row = frame.iloc[-1].to_dict()
                 self.portfolio.update_market_price(symbol, price)
-                exit_signal = self.stop_or_take_profit_signal(symbol, price)
+                market_contexts.append(
+                    {
+                        "symbol": symbol,
+                        "strategy_id": strategy_id,
+                        "timeframe": timeframe,
+                        "frame": frame,
+                        "price": price,
+                        "latest_row": frame.iloc[-1].to_dict(),
+                        "recent_drop": self.recent_drop(frame),
+                    }
+                )
+            except Exception as exc:
+                self.log(f"symbol_error symbol={symbol} strategy={strategy_id}/{timeframe} error={exc}")
+        crash_mode = self.detect_crash_mode(market_contexts)
+        if crash_mode:
+            drops = [context["recent_drop"] for context in market_contexts if context["recent_drop"] is not None]
+            avg_drop = sum(drops) / len(drops) if drops else 0.0
+            self.log(
+                f"crash_mode=ON symbols={len(drops)} avg_recent_drop={avg_drop:.2%} "
+                f"trigger_drop={self.crash_drop_pct:.2%} short_trailing={self.crash_short_trailing_pct:.2%}"
+            )
+        for context in market_contexts:
+            symbol = context["symbol"]
+            strategy_id = context["strategy_id"]
+            timeframe = context["timeframe"]
+            try:
+                frame = context["frame"]
+                price = context["price"]
+                latest_row = context["latest_row"]
+                exit_signal = self.stop_or_take_profit_signal(symbol, price, crash_mode)
                 if exit_signal is not None:
                     ok, filled, order_ids = self.execute_signal(exit_signal, latest_row)
                     signals_created += 1
@@ -110,7 +152,9 @@ class AltcoinPaperMonitor:
                     rejected += 0 if ok else 1
             except Exception as exc:
                 self.log(f"symbol_error symbol={symbol} strategy={strategy_id}/{timeframe} error={exc}")
+        self.prune_runtime_state()
         self.save_portfolio()
+        self.save_runtime_state()
         self.write_latest(signals_created, orders_created, fills_created, rejected, exchange_order_ids)
         self.log(
             f"{self.execution_mode}_summary equity={self.portfolio.equity:.2f} used_margin={self.portfolio.used_margin:.2f} "
@@ -166,21 +210,50 @@ class AltcoinPaperMonitor:
         )
         return True, True, [fill.exchange_order_id] if fill.exchange_order_id else []
 
-    def stop_or_take_profit_signal(self, symbol: str, price: float) -> SignalEvent | None:
+    def stop_or_take_profit_signal(self, symbol: str, price: float, crash_mode: bool) -> SignalEvent | None:
         pos = self.portfolio.get_position(symbol)
         if not pos.is_open() or pos.entry_price <= 0:
+            self.short_trailing_peaks.pop(symbol, None)
             return None
         if pos.position_side == "LONG":
             change = price / pos.entry_price - 1
             close_type = SignalType.CLOSE_LONG
+            self.short_trailing_peaks.pop(symbol, None)
         else:
             change = pos.entry_price / price - 1
             close_type = SignalType.CLOSE_SHORT
         if change <= -self.stop_loss_pct:
+            self.short_trailing_peaks.pop(symbol, None)
             return SignalEvent(symbol, close_type, "Altcoin Paper Stop Loss", price)
+        if pos.position_side == "SHORT" and crash_mode:
+            peak = max(self.short_trailing_peaks.get(symbol, change), change)
+            self.short_trailing_peaks[symbol] = peak
+            pullback = peak - change
+            if peak >= self.take_profit_pct and pullback >= self.crash_short_trailing_pct:
+                self.short_trailing_peaks.pop(symbol, None)
+                return SignalEvent(symbol, close_type, "Altcoin Crash Short Trailing Take Profit", price)
+            return None
         if change >= self.take_profit_pct:
+            self.short_trailing_peaks.pop(symbol, None)
             return SignalEvent(symbol, close_type, "Altcoin Paper Take Profit", price)
         return None
+
+    def recent_drop(self, frame) -> float | None:
+        if len(frame) < 5:
+            return None
+        previous = float(frame.iloc[-5]["close"])
+        latest = float(frame.iloc[-1]["close"])
+        if previous <= 0:
+            return None
+        return latest / previous - 1
+
+    def detect_crash_mode(self, market_contexts: list[dict]) -> bool:
+        drops = [context["recent_drop"] for context in market_contexts if context["recent_drop"] is not None]
+        if not drops:
+            return False
+        severe_count = sum(1 for drop in drops if drop <= -self.crash_drop_pct)
+        breadth = severe_count / len(drops)
+        return breadth >= self.crash_breadth_ratio
 
     def load_leaders(self) -> list[dict]:
         if not self.strategy_path.exists():
@@ -200,6 +273,28 @@ class AltcoinPaperMonitor:
     def save_portfolio(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.state_path.write_text(json.dumps(self.portfolio.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def load_runtime_state(self) -> dict:
+        if self.runtime_state_path.exists():
+            try:
+                return json.loads(self.runtime_state_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+        return {}
+
+    def prune_runtime_state(self) -> None:
+        for symbol in list(self.short_trailing_peaks):
+            pos = self.portfolio.get_position(symbol)
+            if not pos.is_open() or pos.position_side != "SHORT":
+                self.short_trailing_peaks.pop(symbol, None)
+
+    def save_runtime_state(self) -> None:
+        self.runtime_state_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "short_trailing_peaks": self.short_trailing_peaks,
+        }
+        self.runtime_state_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
     def write_latest(
         self,
@@ -225,6 +320,10 @@ class AltcoinPaperMonitor:
             "rejected": rejected,
             "exchange_order_ids": exchange_order_ids,
             "order_type": self.order_type,
+            "crash_drop_pct": self.crash_drop_pct,
+            "crash_breadth_ratio": self.crash_breadth_ratio,
+            "crash_short_trailing_pct": self.crash_short_trailing_pct,
+            "short_trailing_peaks": self.short_trailing_peaks,
             "fee_rate": FEE_RATE,
             "positions": self.portfolio.to_dict()["positions"],
         }
@@ -259,6 +358,9 @@ def main() -> None:
     parser.add_argument("--leverage", type=int, default=2, help="paper leverage")
     parser.add_argument("--stop-loss-pct", type=float, default=0.025, help="stop loss percentage")
     parser.add_argument("--take-profit-pct", type=float, default=0.06, help="take profit percentage")
+    parser.add_argument("--crash-drop-pct", type=float, default=0.08, help="recent drop percentage that counts as crash")
+    parser.add_argument("--crash-breadth-ratio", type=float, default=0.6, help="ratio of traded symbols that must crash")
+    parser.add_argument("--crash-short-trailing-pct", type=float, default=0.03, help="short trailing take profit pullback in crash mode")
     parser.add_argument("--execution-mode", choices=["paper", "testnet"], default="paper", help="paper or Binance testnet execution")
     parser.add_argument("--confirm-exchange-orders", default="", help="set to YES to allow testnet exchange orders")
     parser.add_argument("--order-type", choices=["market", "limit"], default="market", help="market or post-only limit orders")
@@ -272,6 +374,9 @@ def main() -> None:
         leverage=args.leverage,
         stop_loss_pct=args.stop_loss_pct,
         take_profit_pct=args.take_profit_pct,
+        crash_drop_pct=args.crash_drop_pct,
+        crash_breadth_ratio=args.crash_breadth_ratio,
+        crash_short_trailing_pct=args.crash_short_trailing_pct,
         execution_mode=args.execution_mode,
         confirm_exchange_orders=args.confirm_exchange_orders,
         order_type=args.order_type,

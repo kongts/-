@@ -7,4 +7,4 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=/opt/quant-futures-bot
 EnvironmentFile=/opt/quant-futures-bot/.env
-ExecStart=/opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.altcoin_paper_monitor --run-once --top 5 --candle-limit 220 --execution-mode testnet --confirm-exchange-orders YES --order-type limit --maker-offset 0.001
+ExecStart=/opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.altcoin_paper_monitor --run-once --top 5 --candle-limit 220 --execution-mode testnet --confirm-exchange-orders YES --order-type limit --maker-offset 0.001 --crash-drop-pct 0.08 --crash-breadth-ratio 0.6 --crash-short-trailing-pct 0.03
