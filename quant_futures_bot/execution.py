@@ -58,9 +58,20 @@ class BinanceTestnetExecution:
                 "options": {"defaultType": "future"},
             }
         )
-        self.exchange.set_sandbox_mode(True)
+        self._use_futures_demo_urls()
         self.exchange.load_markets()
         self._configured_leverage: set[str] = set()
+
+    def _use_futures_demo_urls(self) -> None:
+        demo_v1 = config.BINANCE_FUTURES_TESTNET_REST_URL + "/fapi/v1"
+        demo_v2 = config.BINANCE_FUTURES_TESTNET_REST_URL + "/fapi/v2"
+        demo_v3 = config.BINANCE_FUTURES_TESTNET_REST_URL + "/fapi/v3"
+        self.exchange.urls["api"]["fapiPublic"] = demo_v1
+        self.exchange.urls["api"]["fapiPrivate"] = demo_v1
+        self.exchange.urls["api"]["fapiPublicV2"] = demo_v2
+        self.exchange.urls["api"]["fapiPrivateV2"] = demo_v2
+        self.exchange.urls["api"]["fapiPublicV3"] = demo_v3
+        self.exchange.urls["api"]["fapiPrivateV3"] = demo_v3
 
     def set_leverage_once(self, symbol: str, leverage: int) -> None:
         if symbol in self._configured_leverage:
