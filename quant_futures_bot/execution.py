@@ -55,10 +55,15 @@ class BinanceTestnetExecution:
                 "apiKey": config.BINANCE_TESTNET_API_KEY,
                 "secret": config.BINANCE_TESTNET_API_SECRET,
                 "enableRateLimit": True,
-                "options": {"defaultType": "future"},
+                "options": {
+                    "defaultType": "future",
+                    "fetchCurrencies": False,
+                    "adjustForTimeDifference": True,
+                },
             }
         )
         self._use_futures_demo_urls()
+        self.exchange.has["fetchCurrencies"] = False
         self.exchange.load_markets()
         self._configured_leverage: set[str] = set()
 
