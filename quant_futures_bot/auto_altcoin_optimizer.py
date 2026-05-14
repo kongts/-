@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -22,7 +23,8 @@ def run_once(args: argparse.Namespace) -> None:
         f"max_hold_15m={args.max_hold_bars_15m} max_hold_30m={args.max_hold_bars_30m} "
         f"extended_hold_15m={args.extended_hold_bars_15m} extended_hold_30m={args.extended_hold_bars_30m} "
         f"min_profit_to_extend={args.min_profit_to_extend:.2%} trailing_after_max_hold={args.trailing_after_max_hold_pct:.2%} "
-        f"fee_rate={args.fee_rate:.4%} funding_cost_per_8h={args.funding_cost_rate_per_8h:.4%}"
+        f"fee_rate={args.fee_rate:.4%} funding_cost_per_8h={args.funding_cost_rate_per_8h:.4%} "
+        f"fetch_timeout_ms={args.fetch_timeout_ms} fetch_retries={args.fetch_retries}"
     )
     rows = backtest_top_volume(
         top=args.top,
@@ -42,6 +44,8 @@ def run_once(args: argparse.Namespace) -> None:
         trailing_after_max_hold_pct=args.trailing_after_max_hold_pct,
         fee_rate=args.fee_rate,
         funding_cost_rate_per_8h=args.funding_cost_rate_per_8h,
+        fetch_timeout_ms=args.fetch_timeout_ms,
+        fetch_retries=args.fetch_retries,
     )
     if rows:
         write_csv(Path(args.output), rows)
@@ -72,6 +76,44 @@ def log(message: str) -> None:
     print(line, flush=True)
     with (LOG_DIR / "altcoin_strategy.log").open("a", encoding="utf-8") as fh:
         fh.write(line + "\n")
+
+
+class RunLock:
+    def __init__(self, path: Path, stale_seconds: int) -> None:
+        self.path = path
+        self.stale_seconds = stale_seconds
+        self.fd: int | None = None
+        self.acquired = False
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._remove_stale_lock()
+        try:
+            self.fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(self.fd, f"{os.getpid()} {datetime.now().isoformat(timespec='seconds')}\n".encode("utf-8"))
+            self.acquired = True
+        except FileExistsError:
+            log(f"optimizer_lock_exists path={self.path} action=skip")
+            return False
+        return True
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self.fd is not None:
+            os.close(self.fd)
+        if not self.acquired:
+            return
+        try:
+            self.path.unlink()
+        except FileNotFoundError:
+            pass
+
+    def _remove_stale_lock(self) -> None:
+        if not self.path.exists():
+            return
+        age = time.time() - self.path.stat().st_mtime
+        if age >= self.stale_seconds:
+            log(f"optimizer_stale_lock_removed path={self.path} age_seconds={age:.0f}")
+            self.path.unlink(missing_ok=True)
 
 
 def select_latest_leaders(rows, min_score: float, max_leaders: int) -> list:
@@ -152,6 +194,9 @@ def main() -> None:
         default=FUNDING_COST_RATE_PER_8H,
         help="conservative estimated funding cost per 8h, charged on open notional",
     )
+    parser.add_argument("--fetch-timeout-ms", type=int, default=15000, help="ccxt request timeout in milliseconds")
+    parser.add_argument("--fetch-retries", type=int, default=1, help="OHLCV fetch retry count per symbol/timeframe")
+    parser.add_argument("--lock-timeout-minutes", type=float, default=120.0, help="remove optimizer lock after this many minutes")
     parser.add_argument("--show", type=int, default=30, help="number of rows to print")
     parser.add_argument("--min-score", type=float, default=1.0, help="write all rows with score >= this value to latest-json")
     parser.add_argument("--max-leaders", type=int, default=0, help="cap latest-json leaders; 0 means no cap")
@@ -169,15 +214,21 @@ def main() -> None:
 
     interval_seconds = max(60, int(args.interval_minutes * 60))
     if args.run_once:
-        run_once(args)
+        with RunLock(DATA_DIR / "altcoin_optimizer.lock", int(args.lock_timeout_minutes * 60)) as locked:
+            if locked:
+                run_once(args)
         return
     if args.run_once_first:
-        run_once(args)
+        with RunLock(DATA_DIR / "altcoin_optimizer.lock", int(args.lock_timeout_minutes * 60)) as locked:
+            if locked:
+                run_once(args)
     while True:
         next_at = datetime.fromtimestamp(time.time() + interval_seconds).strftime("%Y-%m-%d %H:%M:%S")
         print(f"next altcoin aggressive rolling backtest at {next_at}", flush=True)
         time.sleep(interval_seconds)
-        run_once(args)
+        with RunLock(DATA_DIR / "altcoin_optimizer.lock", int(args.lock_timeout_minutes * 60)) as locked:
+            if locked:
+                run_once(args)
 
 
 if __name__ == "__main__":

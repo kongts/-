@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from statistics import mean
@@ -58,10 +59,10 @@ class AltcoinBacktestScore:
     score: float
 
 
-def fetch_top_usdt_perpetuals(limit: int = 100, include_majors: bool = False) -> list[tuple[str, float]]:
+def fetch_top_usdt_perpetuals(limit: int = 100, include_majors: bool = False, fetch_timeout_ms: int = 15000) -> list[tuple[str, float]]:
     import ccxt
 
-    exchange = ccxt.binanceusdm({"enableRateLimit": True, "options": {"defaultType": "future"}})
+    exchange = ccxt.binanceusdm({"enableRateLimit": True, "timeout": fetch_timeout_ms, "options": {"defaultType": "future"}})
     markets = exchange.load_markets()
     tickers = exchange.fetch_tickers()
     rows: list[tuple[str, float]] = []
@@ -156,36 +157,49 @@ def backtest_top_volume(
     trailing_after_max_hold_pct: float,
     fee_rate: float,
     funding_cost_rate_per_8h: float,
+    fetch_timeout_ms: int,
+    fetch_retries: int,
 ) -> list[AltcoinBacktestScore]:
     provider = MarketDataProvider(use_exchange=True, fallback_to_synthetic=False)
-    top_symbols = fetch_top_usdt_perpetuals(top, include_majors=include_majors)
+    if provider.exchange is not None:
+        provider.exchange.timeout = fetch_timeout_ms
+    top_symbols = fetch_top_usdt_perpetuals(top, include_majors=include_majors, fetch_timeout_ms=fetch_timeout_ms)
     scores: list[AltcoinBacktestScore] = []
     volume_rank_by_symbol = {symbol: idx for idx, (symbol, _volume) in enumerate(top_symbols, start=1)}
     quote_volume_by_symbol = dict(top_symbols)
     for idx, (symbol, quote_volume) in enumerate(top_symbols, start=1):
         print(f"fetching {idx}/{len(top_symbols)} {symbol} quote_volume={quote_volume:.0f}", flush=True)
         for timeframe in timeframes:
-            frame = add_indicators(provider.fetch_ohlcv(symbol, timeframe=timeframe, limit=candle_limit))
+            print(f"fetching_ohlcv {idx}/{len(top_symbols)} {symbol} timeframe={timeframe} limit={candle_limit}", flush=True)
+            try:
+                frame = fetch_frame_with_retries(provider, symbol, timeframe, candle_limit, fetch_retries)
+            except Exception as exc:
+                print(f"symbol_skipped symbol={symbol} timeframe={timeframe} reason=fetch_failed error={exc}", flush=True)
+                continue
             data_source = provider.last_source_by_symbol.get(symbol, "exchange")
             max_hold_bars = max_hold_bars_for_timeframe(timeframe, max_hold_bars_15m, max_hold_bars_30m)
             extended_hold_bars = max_hold_bars_for_timeframe(timeframe, extended_hold_bars_15m, extended_hold_bars_30m)
             for strategy_id in strategies:
-                result = run_backtest(
-                    symbol,
-                    frame,
-                    strategy_id,
-                    data_source,
-                    max_margin_ratio,
-                    leverage,
-                    stop_loss_pct,
-                    take_profit_pct,
-                    max_hold_bars,
-                    min_profit_to_extend,
-                    trailing_after_max_hold_pct,
-                    extended_hold_bars,
-                    fee_rate,
-                    funding_cost_rate_per_8h,
-                )
+                try:
+                    result = run_backtest(
+                        symbol,
+                        frame,
+                        strategy_id,
+                        data_source,
+                        max_margin_ratio,
+                        leverage,
+                        stop_loss_pct,
+                        take_profit_pct,
+                        max_hold_bars,
+                        min_profit_to_extend,
+                        trailing_after_max_hold_pct,
+                        extended_hold_bars,
+                        fee_rate,
+                        funding_cost_rate_per_8h,
+                    )
+                except Exception as exc:
+                    print(f"backtest_error symbol={symbol} strategy={strategy_id}/{timeframe} error={exc}", flush=True)
+                    continue
                 scores.append(
                     AltcoinBacktestScore(
                         rank=0,
@@ -209,6 +223,26 @@ def backtest_top_volume(
     for rank, item in enumerate(scores, start=1):
         item.rank = rank
     return scores
+
+
+def fetch_frame_with_retries(
+    provider: MarketDataProvider,
+    symbol: str,
+    timeframe: str,
+    candle_limit: int,
+    fetch_retries: int,
+) -> pd.DataFrame:
+    attempts = max(1, fetch_retries + 1)
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return add_indicators(provider.fetch_ohlcv(symbol, timeframe=timeframe, limit=candle_limit))
+        except Exception as exc:
+            last_error = exc
+            print(f"fetch_error symbol={symbol} timeframe={timeframe} attempt={attempt}/{attempts} error={exc}", flush=True)
+            if attempt < attempts:
+                time.sleep(min(5, attempt * 2))
+    raise RuntimeError(str(last_error))
 
 
 def write_csv(path: Path, rows: list[AltcoinBacktestScore]) -> None:
@@ -280,6 +314,8 @@ def main() -> None:
         default=config.FUNDING_COST_RATE_PER_8H,
         help="conservative estimated funding cost per 8h, charged on open notional",
     )
+    parser.add_argument("--fetch-timeout-ms", type=int, default=15000, help="ccxt request timeout in milliseconds")
+    parser.add_argument("--fetch-retries", type=int, default=1, help="OHLCV fetch retry count per symbol/timeframe")
     parser.add_argument("--show", type=int, default=30, help="number of rows to print")
     parser.add_argument("--output", default="quant_futures_bot/data/altcoin_top_volume_backtest.csv", help="CSV output path")
     args = parser.parse_args()
@@ -304,6 +340,8 @@ def main() -> None:
         trailing_after_max_hold_pct=args.trailing_after_max_hold_pct,
         fee_rate=args.fee_rate,
         funding_cost_rate_per_8h=args.funding_cost_rate_per_8h,
+        fetch_timeout_ms=args.fetch_timeout_ms,
+        fetch_retries=args.fetch_retries,
     )
     if rows:
         output = Path(args.output)
