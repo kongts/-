@@ -18,7 +18,9 @@ def run_once(args: argparse.Namespace) -> None:
         "config "
         f"top={args.top} limit={args.limit} timeframes={args.timeframes} strategies={args.strategies} "
         f"stop_loss={args.stop_loss_pct:.2%} take_profit={args.take_profit_pct:.2%} "
-        f"max_margin_ratio={args.max_margin_ratio:.2%} leverage={args.leverage}x"
+        f"max_margin_ratio={args.max_margin_ratio:.2%} leverage={args.leverage}x "
+        f"max_hold_15m={args.max_hold_bars_15m} max_hold_30m={args.max_hold_bars_30m} "
+        f"min_profit_to_extend={args.min_profit_to_extend:.2%} trailing_after_max_hold={args.trailing_after_max_hold_pct:.2%}"
     )
     rows = backtest_top_volume(
         top=args.top,
@@ -30,6 +32,10 @@ def run_once(args: argparse.Namespace) -> None:
         leverage=args.leverage,
         stop_loss_pct=args.stop_loss_pct,
         take_profit_pct=args.take_profit_pct,
+        max_hold_bars_15m=args.max_hold_bars_15m,
+        max_hold_bars_30m=args.max_hold_bars_30m,
+        min_profit_to_extend=args.min_profit_to_extend,
+        trailing_after_max_hold_pct=args.trailing_after_max_hold_pct,
     )
     if rows:
         write_csv(Path(args.output), rows)
@@ -123,6 +129,10 @@ def main() -> None:
     parser.add_argument("--leverage", type=int, default=2, help="leverage for backtest sizing")
     parser.add_argument("--stop-loss-pct", type=float, default=0.025, help="stop loss percentage, e.g. 0.025 = 2.5%%")
     parser.add_argument("--take-profit-pct", type=float, default=0.06, help="take profit percentage, e.g. 0.06 = 6%%")
+    parser.add_argument("--max-hold-bars-15m", type=int, default=8, help="max holding bars for 15m strategies")
+    parser.add_argument("--max-hold-bars-30m", type=int, default=6, help="max holding bars for 30m strategies")
+    parser.add_argument("--min-profit-to-extend", type=float, default=0.03, help="profit required to switch max-hold exit to trailing")
+    parser.add_argument("--trailing-after-max-hold-pct", type=float, default=0.03, help="trailing pullback after max-hold extension")
     parser.add_argument("--show", type=int, default=30, help="number of rows to print")
     parser.add_argument("--min-score", type=float, default=1.0, help="write all rows with score >= this value to latest-json")
     parser.add_argument("--max-leaders", type=int, default=0, help="cap latest-json leaders; 0 means no cap")

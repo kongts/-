@@ -96,6 +96,9 @@ def run_backtest(
     leverage: int,
     stop_loss_pct: float,
     take_profit_pct: float,
+    max_hold_bars: int,
+    min_profit_to_extend: float,
+    trailing_after_max_hold_pct: float,
 ) -> BacktestResult:
     symbol_configs = {
         symbol: {
@@ -112,6 +115,9 @@ def run_backtest(
         symbol_configs=symbol_configs,
         stop_loss_pct=stop_loss_pct,
         take_profit_pct=take_profit_pct,
+        max_hold_bars=max_hold_bars,
+        min_profit_to_extend=min_profit_to_extend,
+        trailing_after_max_hold_pct=trailing_after_max_hold_pct,
     ).run()
 
 
@@ -134,6 +140,10 @@ def backtest_top_volume(
     leverage: int,
     stop_loss_pct: float,
     take_profit_pct: float,
+    max_hold_bars_15m: int,
+    max_hold_bars_30m: int,
+    min_profit_to_extend: float,
+    trailing_after_max_hold_pct: float,
 ) -> list[AltcoinBacktestScore]:
     provider = MarketDataProvider(use_exchange=True, fallback_to_synthetic=False)
     top_symbols = fetch_top_usdt_perpetuals(top, include_majors=include_majors)
@@ -145,6 +155,7 @@ def backtest_top_volume(
         for timeframe in timeframes:
             frame = add_indicators(provider.fetch_ohlcv(symbol, timeframe=timeframe, limit=candle_limit))
             data_source = provider.last_source_by_symbol.get(symbol, "exchange")
+            max_hold_bars = max_hold_bars_for_timeframe(timeframe, max_hold_bars_15m, max_hold_bars_30m)
             for strategy_id in strategies:
                 result = run_backtest(
                     symbol,
@@ -155,6 +166,9 @@ def backtest_top_volume(
                     leverage,
                     stop_loss_pct,
                     take_profit_pct,
+                    max_hold_bars,
+                    min_profit_to_extend,
+                    trailing_after_max_hold_pct,
                 )
                 scores.append(
                     AltcoinBacktestScore(
@@ -216,6 +230,14 @@ def first_float(*values) -> float:
     return 0.0
 
 
+def max_hold_bars_for_timeframe(timeframe: str, max_hold_bars_15m: int, max_hold_bars_30m: int) -> int:
+    if timeframe == "15m":
+        return max_hold_bars_15m
+    if timeframe == "30m":
+        return max_hold_bars_30m
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backtest aggressive strategies on top Binance USDT perpetuals by 24h volume")
     parser.add_argument("--top", type=int, default=100, help="number of top-volume USDT perpetual symbols")
@@ -227,6 +249,10 @@ def main() -> None:
     parser.add_argument("--leverage", type=int, default=2, help="leverage for backtest sizing")
     parser.add_argument("--stop-loss-pct", type=float, default=0.025, help="stop loss percentage, e.g. 0.025 = 2.5%%")
     parser.add_argument("--take-profit-pct", type=float, default=0.06, help="take profit percentage, e.g. 0.06 = 6%%")
+    parser.add_argument("--max-hold-bars-15m", type=int, default=8, help="max holding bars for 15m strategies")
+    parser.add_argument("--max-hold-bars-30m", type=int, default=6, help="max holding bars for 30m strategies")
+    parser.add_argument("--min-profit-to-extend", type=float, default=0.03, help="profit required to switch max-hold exit to trailing")
+    parser.add_argument("--trailing-after-max-hold-pct", type=float, default=0.03, help="trailing pullback after max-hold extension")
     parser.add_argument("--show", type=int, default=30, help="number of rows to print")
     parser.add_argument("--output", default="quant_futures_bot/data/altcoin_top_volume_backtest.csv", help="CSV output path")
     args = parser.parse_args()
@@ -243,6 +269,10 @@ def main() -> None:
         leverage=args.leverage,
         stop_loss_pct=args.stop_loss_pct,
         take_profit_pct=args.take_profit_pct,
+        max_hold_bars_15m=args.max_hold_bars_15m,
+        max_hold_bars_30m=args.max_hold_bars_30m,
+        min_profit_to_extend=args.min_profit_to_extend,
+        trailing_after_max_hold_pct=args.trailing_after_max_hold_pct,
     )
     if rows:
         output = Path(args.output)

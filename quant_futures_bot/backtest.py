@@ -48,6 +48,9 @@ class Backtester:
         symbol_configs: dict[str, dict] | None = None,
         stop_loss_pct: float = 0.0,
         take_profit_pct: float = 0.0,
+        max_hold_bars: int = 0,
+        min_profit_to_extend: float = 0.03,
+        trailing_after_max_hold_pct: float = 0.03,
     ) -> None:
         self.data_provider = MarketDataProvider(use_exchange=not offline, fallback_to_synthetic=offline)
         self.strategy_manager = StrategyManager(strategy_id=strategy_id, use_saved_selection=strategy_id is None)
@@ -56,6 +59,9 @@ class Backtester:
         self.symbol_configs = symbol_configs or {}
         self.stop_loss_pct = stop_loss_pct
         self.take_profit_pct = take_profit_pct
+        self.max_hold_bars = max_hold_bars
+        self.min_profit_to_extend = min_profit_to_extend
+        self.trailing_after_max_hold_pct = trailing_after_max_hold_pct
         self.order_manager = OrderManager()
         self.execution = PaperExecution()
         self.portfolio = Portfolio()
@@ -63,6 +69,9 @@ class Backtester:
         self.risk_engine = RiskEngine(self.portfolio, self.pause_manager, symbol_configs=self.symbol_configs)
         self.trade_sides: list[str] = []
         self.trade_pnls: list[float] = []
+        self.open_bar_by_symbol: dict[str, int] = {}
+        self.max_hold_profit_peaks: dict[str, float] = {}
+        self.current_idx = 0
         self.pause_count = 0
         self.equity_curve: list[float] = []
 
@@ -70,13 +79,14 @@ class Backtester:
         frames = self.frames or self.load_frames()
         min_len = min(len(df) for df in frames.values())
         for idx in range(40, min_len):
+            self.current_idx = idx
             latest_rows = {}
             for symbol, df in frames.items():
                 window = df.iloc[: idx + 1].copy()
                 price = float(window.iloc[-1]["close"])
                 self.portfolio.update_market_price(symbol, price)
                 latest_rows[symbol] = window.iloc[-1].to_dict()
-                exit_signal = self._stop_or_take_profit_signal(symbol, price)
+                exit_signal = self._stop_or_take_profit_signal(symbol, price, idx)
                 if exit_signal is not None:
                     self._execute_signal(exit_signal, latest_rows[symbol])
                     continue
@@ -113,14 +123,21 @@ class Backtester:
         submitted = self.order_manager.update_status(order.order_id, OrderStatus.SUBMITTED)
         fill = self.execution.execute(submitted)
         pnl = self.portfolio.apply_fill(fill, float(self._symbol_config(signal.symbol)["leverage"]))
+        if fill.position_action in {SignalType.OPEN_LONG, SignalType.OPEN_SHORT}:
+            self.open_bar_by_symbol[fill.symbol] = self.current_idx
+            self.max_hold_profit_peaks.pop(fill.symbol, None)
         if fill.position_action.value.startswith("CLOSE"):
             self.trade_sides.append("LONG" if "LONG" in fill.position_action.value else "SHORT")
             self.trade_pnls.append(pnl)
+            self.open_bar_by_symbol.pop(fill.symbol, None)
+            self.max_hold_profit_peaks.pop(fill.symbol, None)
         self.order_manager.update_status(order.order_id, OrderStatus.FILLED)
 
-    def _stop_or_take_profit_signal(self, symbol: str, price: float) -> SignalEvent | None:
+    def _stop_or_take_profit_signal(self, symbol: str, price: float, idx: int) -> SignalEvent | None:
         pos = self.portfolio.get_position(symbol)
         if not pos.is_open() or pos.entry_price <= 0:
+            self.open_bar_by_symbol.pop(symbol, None)
+            self.max_hold_profit_peaks.pop(symbol, None)
             return None
         if pos.position_side == "LONG":
             change = price / pos.entry_price - 1
@@ -129,8 +146,23 @@ class Backtester:
             change = pos.entry_price / price - 1
             close_type = SignalType.CLOSE_SHORT
         if self.stop_loss_pct > 0 and change <= -self.stop_loss_pct:
+            self.max_hold_profit_peaks.pop(symbol, None)
             return SignalEvent(symbol, close_type, "Stop Loss", price)
+        if self.max_hold_bars > 0:
+            open_bar = self.open_bar_by_symbol.get(symbol, idx)
+            held_bars = idx - open_bar
+            if held_bars >= self.max_hold_bars:
+                if change < self.min_profit_to_extend:
+                    self.max_hold_profit_peaks.pop(symbol, None)
+                    return SignalEvent(symbol, close_type, "Max Hold Time", price)
+                peak = max(self.max_hold_profit_peaks.get(symbol, change), change)
+                self.max_hold_profit_peaks[symbol] = peak
+                if peak - change >= self.trailing_after_max_hold_pct:
+                    self.max_hold_profit_peaks.pop(symbol, None)
+                    return SignalEvent(symbol, close_type, "Max Hold Trailing Take Profit", price)
+                return None
         if self.take_profit_pct > 0 and change >= self.take_profit_pct:
+            self.max_hold_profit_peaks.pop(symbol, None)
             return SignalEvent(symbol, close_type, "Take Profit", price)
         return None
 

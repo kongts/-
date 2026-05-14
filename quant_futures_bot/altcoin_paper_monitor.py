@@ -44,6 +44,10 @@ class AltcoinPaperMonitor:
         open_order_timeout_seconds: int = 180,
         close_order_timeout_seconds: int = 60,
         max_order_failures: int = 3,
+        max_hold_bars_15m: int = 8,
+        max_hold_bars_30m: int = 6,
+        min_profit_to_extend: float = 0.03,
+        trailing_after_max_hold_pct: float = 0.03,
         execution_mode: str = "paper",
         confirm_exchange_orders: str = "",
         order_type: str = "market",
@@ -82,10 +86,15 @@ class AltcoinPaperMonitor:
         self.open_order_timeout_seconds = open_order_timeout_seconds
         self.close_order_timeout_seconds = close_order_timeout_seconds
         self.max_order_failures = max_order_failures
+        self.max_hold_bars_15m = max_hold_bars_15m
+        self.max_hold_bars_30m = max_hold_bars_30m
+        self.min_profit_to_extend = min_profit_to_extend
+        self.trailing_after_max_hold_pct = trailing_after_max_hold_pct
         self.data_provider = MarketDataProvider(use_exchange=True, fallback_to_synthetic=False)
         self.portfolio = self.load_portfolio()
         runtime_state = self.load_runtime_state()
         self.short_trailing_peaks: dict[str, float] = dict(runtime_state.get("short_trailing_peaks", {}))
+        self.max_hold_profit_peaks: dict[str, float] = dict(runtime_state.get("max_hold_profit_peaks", {}))
         self.pending_orders: dict[str, dict] = dict(runtime_state.get("pending_orders", {}))
         self.order_failures: dict[str, int] = dict(runtime_state.get("order_failures", {}))
         self.paused_symbols: dict[str, str] = dict(runtime_state.get("paused_symbols", {}))
@@ -158,7 +167,7 @@ class AltcoinPaperMonitor:
                 if symbol in self.pending_orders:
                     self.log(f"pending_order_wait symbol={symbol} exchange_order_id={self.pending_orders[symbol].get('exchange_order_id', '-')}")
                     continue
-                exit_signal = self.stop_or_take_profit_signal(symbol, price, crash_watch)
+                exit_signal = self.stop_or_take_profit_signal(symbol, price, crash_watch, timeframe)
                 if exit_signal is not None:
                     ok, filled, order_ids = self.execute_signal(exit_signal, latest_row)
                     signals_created += 1
@@ -271,10 +280,11 @@ class AltcoinPaperMonitor:
         )
         return True, True, [fill.exchange_order_id] if fill.exchange_order_id else []
 
-    def stop_or_take_profit_signal(self, symbol: str, price: float, crash_watch: bool) -> SignalEvent | None:
+    def stop_or_take_profit_signal(self, symbol: str, price: float, crash_watch: bool, timeframe: str) -> SignalEvent | None:
         pos = self.portfolio.get_position(symbol)
         if not pos.is_open() or pos.entry_price <= 0:
             self.short_trailing_peaks.pop(symbol, None)
+            self.max_hold_profit_peaks.pop(symbol, None)
             return None
         if pos.position_side == "LONG":
             change = price / pos.entry_price - 1
@@ -285,6 +295,7 @@ class AltcoinPaperMonitor:
             close_type = SignalType.CLOSE_SHORT
         if change <= -self.stop_loss_pct:
             self.short_trailing_peaks.pop(symbol, None)
+            self.max_hold_profit_peaks.pop(symbol, None)
             return SignalEvent(symbol, close_type, "Altcoin Paper Stop Loss", price)
         if pos.position_side == "SHORT" and crash_watch:
             peak = max(self.short_trailing_peaks.get(symbol, change), change)
@@ -292,12 +303,40 @@ class AltcoinPaperMonitor:
             pullback = peak - change
             if peak >= self.take_profit_pct and pullback >= self.crash_short_trailing_pct:
                 self.short_trailing_peaks.pop(symbol, None)
+                self.max_hold_profit_peaks.pop(symbol, None)
                 return SignalEvent(symbol, close_type, "Altcoin Crash Short Trailing Take Profit", price)
+            return None
+        max_hold_seconds = self.max_hold_seconds_for_timeframe(timeframe)
+        held_seconds = self.position_age_seconds(pos.open_time)
+        if max_hold_seconds > 0 and held_seconds is not None and held_seconds >= max_hold_seconds:
+            if change < self.min_profit_to_extend:
+                self.max_hold_profit_peaks.pop(symbol, None)
+                return SignalEvent(symbol, close_type, "Altcoin Max Hold Time", price)
+            peak = max(self.max_hold_profit_peaks.get(symbol, change), change)
+            self.max_hold_profit_peaks[symbol] = peak
+            if peak - change >= self.trailing_after_max_hold_pct:
+                self.max_hold_profit_peaks.pop(symbol, None)
+                return SignalEvent(symbol, close_type, "Altcoin Max Hold Trailing Take Profit", price)
             return None
         if change >= self.take_profit_pct:
             self.short_trailing_peaks.pop(symbol, None)
+            self.max_hold_profit_peaks.pop(symbol, None)
             return SignalEvent(symbol, close_type, "Altcoin Paper Take Profit", price)
         return None
+
+    def max_hold_seconds_for_timeframe(self, timeframe: str) -> int:
+        if timeframe == "15m":
+            return self.max_hold_bars_15m * 15 * 60
+        if timeframe == "30m":
+            return self.max_hold_bars_30m * 30 * 60
+        return 0
+
+    @staticmethod
+    def position_age_seconds(open_time: str) -> float | None:
+        opened_at = AltcoinPaperMonitor.parse_datetime(open_time)
+        if opened_at is None:
+            return None
+        return (datetime.now(timezone.utc) - opened_at).total_seconds()
 
     def recent_drop(self, frame) -> float | None:
         if len(frame) < 5:
@@ -464,12 +503,17 @@ class AltcoinPaperMonitor:
             pos = self.portfolio.get_position(symbol)
             if not pos.is_open() or pos.position_side != "SHORT":
                 self.short_trailing_peaks.pop(symbol, None)
+        for symbol in list(self.max_hold_profit_peaks):
+            pos = self.portfolio.get_position(symbol)
+            if not pos.is_open():
+                self.max_hold_profit_peaks.pop(symbol, None)
 
     def save_runtime_state(self) -> None:
         self.runtime_state_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "updated_at": datetime.now().isoformat(timespec="seconds"),
             "short_trailing_peaks": self.short_trailing_peaks,
+            "max_hold_profit_peaks": self.max_hold_profit_peaks,
             "pending_orders": self.pending_orders,
             "order_failures": self.order_failures,
             "paused_symbols": self.paused_symbols,
@@ -508,7 +552,12 @@ class AltcoinPaperMonitor:
             "crash_watch_drop_pct": self.crash_watch_drop_pct,
             "crash_watch_breadth_ratio": self.crash_watch_breadth_ratio,
             "crash_short_trailing_pct": self.crash_short_trailing_pct,
+            "max_hold_bars_15m": self.max_hold_bars_15m,
+            "max_hold_bars_30m": self.max_hold_bars_30m,
+            "min_profit_to_extend": self.min_profit_to_extend,
+            "trailing_after_max_hold_pct": self.trailing_after_max_hold_pct,
             "short_trailing_peaks": self.short_trailing_peaks,
+            "max_hold_profit_peaks": self.max_hold_profit_peaks,
             "fee_rate": FEE_RATE,
             "positions": self.portfolio.to_dict()["positions"],
         }
@@ -568,6 +617,10 @@ def main() -> None:
     parser.add_argument("--open-order-timeout-seconds", type=int, default=180, help="cancel unfilled opening limit orders after this many seconds")
     parser.add_argument("--close-order-timeout-seconds", type=int, default=60, help="cancel unfilled closing limit orders after this many seconds")
     parser.add_argument("--max-order-failures", type=int, default=3, help="pause a symbol after this many consecutive order failures")
+    parser.add_argument("--max-hold-bars-15m", type=int, default=8, help="max holding bars for 15m strategies")
+    parser.add_argument("--max-hold-bars-30m", type=int, default=6, help="max holding bars for 30m strategies")
+    parser.add_argument("--min-profit-to-extend", type=float, default=0.03, help="profit required to switch max-hold exit to trailing")
+    parser.add_argument("--trailing-after-max-hold-pct", type=float, default=0.03, help="trailing pullback after max-hold extension")
     parser.add_argument("--execution-mode", choices=["paper", "testnet"], default="paper", help="paper or Binance testnet execution")
     parser.add_argument("--confirm-exchange-orders", default="", help="set to YES to allow testnet exchange orders")
     parser.add_argument("--order-type", choices=["market", "limit"], default="market", help="market or post-only limit orders")
@@ -587,6 +640,10 @@ def main() -> None:
         open_order_timeout_seconds=args.open_order_timeout_seconds,
         close_order_timeout_seconds=args.close_order_timeout_seconds,
         max_order_failures=args.max_order_failures,
+        max_hold_bars_15m=args.max_hold_bars_15m,
+        max_hold_bars_30m=args.max_hold_bars_30m,
+        min_profit_to_extend=args.min_profit_to_extend,
+        trailing_after_max_hold_pct=args.trailing_after_max_hold_pct,
         execution_mode=args.execution_mode,
         confirm_exchange_orders=args.confirm_exchange_orders,
         order_type=args.order_type,

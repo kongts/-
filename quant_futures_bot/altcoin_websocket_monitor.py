@@ -41,6 +41,10 @@ class AltcoinWebSocketMonitor:
             open_order_timeout_seconds=180,
             close_order_timeout_seconds=60,
             max_order_failures=3,
+            max_hold_bars_15m=8,
+            max_hold_bars_30m=6,
+            min_profit_to_extend=0.03,
+            trailing_after_max_hold_pct=0.03,
         )
         self.lock = threading.Lock()
         self.prices: dict[str, float] = {}
