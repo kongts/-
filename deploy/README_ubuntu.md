@@ -436,23 +436,35 @@ testnet_order ... type=limit ... status=submitted post_only=YES
 
 ## 常用排查
 
-实时查看账户、持仓和浮盈浮亏：
+查看一次账户、持仓和浮盈浮亏：
 
 ```bash
-cd /opt/quant-futures-bot && /opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.account_watch --interval-seconds 5
+cd /opt/quant-futures-bot && /opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.account_watch
 ```
 
-只查看一次：
+如需持续刷新：
 
 ```bash
-cd /opt/quant-futures-bot && /opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.account_watch --once
+cd /opt/quant-futures-bot && /opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.account_watch --watch --interval-seconds 5
 ```
 
 输出示例：
 
 ```text
-[2026-05-14 13:20:00] equity=4964.51 wallet=5000.00 available=4374.11 used_margin=590.40 unrealized=-16.40 positions=2 open_orders=0
-  BTC/USDT:USDT LONG qty=0.01000000 entry=79814.600000 mark=78852.200000 notional=788.52 margin=394.26 pnl=-9.62 pnl_pct=-1.22%
+Account Snapshot  2026-05-14 13:20:00
+========================================================================
+Equity                  4964.51 USDT
+Wallet                  5000.00 USDT
+Available               4374.11 USDT
+Used Margin              590.40 USDT  (11.89%)
+Unrealized PnL           -16.40 USDT
+Positions                     2
+Open Orders                   0
+
+Positions
+----------------------------------------------------------------------------------------------------------------
+Symbol              Side              Qty         Entry          Mark      Notional      Margin         PnL     PnL%
+BTC/USDT:USDT       LONG       0.01000000  79814.600000  78852.200000        788.52      394.26       -9.62   -1.22%
 ```
 
 退出实时查看：

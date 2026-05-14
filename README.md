@@ -419,16 +419,16 @@ crash_watch=ON symbols=5 avg_recent_drop=-4.25% trigger_drop=3.00% short_trailin
 
 ## 手动回测
 
-实时查看 Testnet 账户、持仓和浮盈浮亏：
+查看一次 Testnet 账户、持仓和浮盈浮亏：
 
 ```bash
-python -m quant_futures_bot.account_watch --interval-seconds 5
+python -m quant_futures_bot.account_watch
 ```
 
-只查看一次：
+如需持续刷新：
 
 ```bash
-python -m quant_futures_bot.account_watch --once
+python -m quant_futures_bot.account_watch --watch --interval-seconds 5
 ```
 
 主策略回测：

@@ -8,15 +8,15 @@ from .execution import BinanceTestnetExecution
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Watch Binance Futures Demo/Testnet account positions and PnL")
+    parser = argparse.ArgumentParser(description="Show Binance Futures Demo/Testnet account positions and PnL")
     parser.add_argument("--interval-seconds", type=float, default=5.0, help="refresh interval")
-    parser.add_argument("--once", action="store_true", help="print once and exit")
+    parser.add_argument("--watch", action="store_true", help="refresh continuously")
     args = parser.parse_args()
 
     execution = BinanceTestnetExecution()
     while True:
         print_snapshot(execution.exchange)
-        if args.once:
+        if not args.watch:
             return
         time.sleep(max(1.0, args.interval_seconds))
 
@@ -33,25 +33,36 @@ def print_snapshot(exchange) -> None:
     available = first_float(free.get("USDT"), info.get("availableBalance"), wallet)
     unrealized = sum(item["unrealized_pnl"] for item in positions)
     used_margin = max(equity - available, 0.0)
+    margin_ratio = used_margin / equity * 100 if equity > 0 else 0.0
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(
-        f"[{now}] equity={equity:.2f} wallet={wallet:.2f} available={available:.2f} "
-        f"used_margin={used_margin:.2f} unrealized={unrealized:.2f} "
-        f"positions={len(positions)} open_orders={open_orders}",
-        flush=True,
-    )
+    print(f"\nAccount Snapshot  {now}")
+    print("=" * 72)
+    print(f"{'Equity':<16}{equity:>14.2f} USDT")
+    print(f"{'Wallet':<16}{wallet:>14.2f} USDT")
+    print(f"{'Available':<16}{available:>14.2f} USDT")
+    print(f"{'Used Margin':<16}{used_margin:>14.2f} USDT  ({margin_ratio:.2f}%)")
+    print(f"{'Unrealized PnL':<16}{unrealized:>14.2f} USDT")
+    print(f"{'Positions':<16}{len(positions):>14}")
+    print(f"{'Open Orders':<16}{open_orders:>14}")
+    print()
+    print("Positions")
+    print("-" * 112)
     if not positions:
-        print("  positions=-", flush=True)
+        print("No open positions.", flush=True)
         return
+    print(
+        f"{'Symbol':<20}{'Side':<7}{'Qty':>14}{'Entry':>14}{'Mark':>14}"
+        f"{'Notional':>14}{'Margin':>12}{'PnL':>12}{'PnL%':>9}"
+    )
+    print("-" * 112)
     for item in sorted(positions, key=lambda row: row["symbol"]):
         pnl_pct = item["unrealized_pnl"] / item["notional_value"] * 100 if item["notional_value"] else 0.0
         print(
-            "  "
-            f"{item['symbol']} {item['side']} qty={item['qty']:.8f} "
-            f"entry={item['entry_price']:.6f} mark={item['mark_price']:.6f} "
-            f"notional={item['notional_value']:.2f} margin={item['margin_used']:.2f} "
-            f"pnl={item['unrealized_pnl']:.2f} pnl_pct={pnl_pct:.2f}%",
+            f"{item['symbol']:<20}{item['side']:<7}{item['qty']:>14.8f}"
+            f"{item['entry_price']:>14.6f}{item['mark_price']:>14.6f}"
+            f"{item['notional_value']:>14.2f}{item['margin_used']:>12.2f}"
+            f"{item['unrealized_pnl']:>12.2f}{pnl_pct:>8.2f}%",
             flush=True,
         )
 
