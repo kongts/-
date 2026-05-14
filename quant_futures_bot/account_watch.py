@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from .execution import BinanceTestnetExecution
 
@@ -25,6 +25,7 @@ def print_snapshot(exchange) -> None:
     balance = exchange.fetch_balance()
     positions = active_positions(exchange)
     open_orders = open_orders_count(exchange)
+    pnl_summary = realized_pnl_summary(exchange)
     info = balance.get("info", {})
     total = balance.get("total", {})
     free = balance.get("free", {})
@@ -46,6 +47,8 @@ def print_snapshot(exchange) -> None:
     print(f"{'Positions':<16}{len(positions):>14}")
     print(f"{'Open Orders':<16}{open_orders:>14}")
     print()
+    print_realized_pnl_summary(pnl_summary)
+    print()
     print("Positions")
     print("-" * 112)
     if not positions:
@@ -65,6 +68,87 @@ def print_snapshot(exchange) -> None:
             f"{item['unrealized_pnl']:>12.2f}{pnl_pct:>8.2f}%",
             flush=True,
         )
+
+
+def print_realized_pnl_summary(summary: dict) -> None:
+    print("Realized PnL")
+    print("-" * 84)
+    print(f"{'Period':<10}{'Realized':>14}{'Fee':>14}{'Funding':>14}{'Other':>14}{'Net':>14}")
+    print("-" * 84)
+    for key, label in (("day", "Today"), ("week", "7 Days"), ("month", "30 Days")):
+        item = summary.get(key, {})
+        print(
+            f"{label:<10}"
+            f"{item.get('realized_pnl', 0.0):>14.2f}"
+            f"{item.get('commission', 0.0):>14.2f}"
+            f"{item.get('funding_fee', 0.0):>14.2f}"
+            f"{item.get('other', 0.0):>14.2f}"
+            f"{item.get('net', 0.0):>14.2f}"
+        )
+    if summary.get("error"):
+        print(f"Income history unavailable: {summary['error']}")
+
+
+def realized_pnl_summary(exchange) -> dict:
+    now = datetime.now(timezone.utc)
+    periods = {
+        "day": now - timedelta(days=1),
+        "week": now - timedelta(days=7),
+        "month": now - timedelta(days=30),
+    }
+    summary = {key: empty_income_bucket() for key in periods}
+    try:
+        incomes = fetch_income(exchange, int(periods["month"].timestamp() * 1000))
+    except Exception as exc:
+        summary["error"] = str(exc)
+        return summary
+    for item in incomes:
+        timestamp = income_timestamp(item)
+        if timestamp is None:
+            continue
+        amount = first_float(item.get("income"), item.get("amount"), 0.0)
+        income_type = str(item.get("incomeType") or item.get("type") or "").upper()
+        for key, start in periods.items():
+            if timestamp >= start:
+                add_income(summary[key], income_type, amount)
+    for item in summary.values():
+        item["net"] = item["realized_pnl"] + item["commission"] + item["funding_fee"] + item["other"]
+    return summary
+
+
+def fetch_income(exchange, start_time_ms: int) -> list[dict]:
+    if hasattr(exchange, "fapiPrivateGetIncome"):
+        rows = exchange.fapiPrivateGetIncome({"startTime": start_time_ms, "limit": 1000})
+        return list(rows or [])
+    if hasattr(exchange, "fetch_income"):
+        rows = exchange.fetch_income(None, start_time_ms, 1000)
+        return list(rows or [])
+    raise RuntimeError("exchange does not expose futures income history")
+
+
+def income_timestamp(item: dict) -> datetime | None:
+    raw_time = item.get("time") or item.get("timestamp")
+    if raw_time is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(raw_time) / 1000, tz=timezone.utc)
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def empty_income_bucket() -> dict:
+    return {"realized_pnl": 0.0, "commission": 0.0, "funding_fee": 0.0, "other": 0.0, "net": 0.0}
+
+
+def add_income(bucket: dict, income_type: str, amount: float) -> None:
+    if income_type == "REALIZED_PNL":
+        bucket["realized_pnl"] += amount
+    elif income_type == "COMMISSION":
+        bucket["commission"] += amount
+    elif income_type == "FUNDING_FEE":
+        bucket["funding_fee"] += amount
+    else:
+        bucket["other"] += amount
 
 
 def active_positions(exchange) -> list[dict]:

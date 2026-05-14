@@ -425,6 +425,8 @@ crash_watch=ON symbols=5 avg_recent_drop=-4.25% trigger_drop=3.00% short_trailin
 python -m quant_futures_bot.account_watch
 ```
 
+输出包含账户余额、未实现盈亏、当前持仓，以及最近 24 小时、7 天、30 天的已实现盈亏、手续费、资金费和净结果。
+
 如需持续刷新：
 
 ```bash
