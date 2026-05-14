@@ -15,7 +15,7 @@ from .websocket_monitor import BINANCE_FUTURES_WS_URL, stream_symbol
 class AltcoinWebSocketMonitor:
     def __init__(
         self,
-        top: int = 5,
+        top: int = 0,
         candle_limit: int = 220,
         print_seconds: int = 5,
         reconnect_seconds: int = 5,
@@ -48,7 +48,7 @@ class AltcoinWebSocketMonitor:
         self.last_maintenance_time = 0.0
         self.last_leader_refresh_time = 0.0
         self.last_bucket_by_timeframe: dict[str, int] = {}
-        self.leaders = self.monitor.load_leaders()[: self.top]
+        self.leaders = self.selected_leaders()
         self.leader_key = self.make_leader_key(self.leaders)
         self.ws = None
         if run_initial_cycle:
@@ -78,7 +78,7 @@ class AltcoinWebSocketMonitor:
             self.refresh_leaders()
 
     def url(self) -> str:
-        streams = [f"{stream_symbol(leader['symbol'])}@bookTicker" for leader in self.leaders]
+        streams = [f"{stream_symbol(symbol)}@bookTicker" for symbol in self.symbols()]
         return f"{BINANCE_FUTURES_WS_URL}?streams={'/'.join(streams)}"
 
     def on_open(self, _ws) -> None:
@@ -138,7 +138,7 @@ class AltcoinWebSocketMonitor:
         try:
             print(f"[{self.now()}] altcoin_strategy_cycle reason=\"{reason}\"", flush=True)
             self.monitor.run_once()
-            self.leaders = self.monitor.load_leaders()[: self.top]
+            self.leaders = self.selected_leaders()
             self.leader_key = self.make_leader_key(self.leaders)
         except Exception as exc:
             print(f"[{self.now()}] altcoin_strategy_cycle_error reason=\"{reason}\" error={exc}", flush=True)
@@ -150,7 +150,7 @@ class AltcoinWebSocketMonitor:
             print(f"[{self.now()}] altcoin_maintenance_error={exc}", flush=True)
 
     def refresh_leaders(self) -> bool:
-        leaders = self.monitor.load_leaders()[: self.top]
+        leaders = self.selected_leaders()
         leader_key = self.make_leader_key(leaders)
         if leader_key == self.leader_key:
             return False
@@ -184,7 +184,13 @@ class AltcoinWebSocketMonitor:
         return sorted(timeframes, key=self.timeframe_seconds)
 
     def symbols(self) -> list[str]:
-        return [leader["symbol"] for leader in self.leaders]
+        return sorted({leader["symbol"] for leader in self.leaders})
+
+    def selected_leaders(self) -> list[dict]:
+        leaders = self.monitor.load_leaders()
+        if self.top <= 0:
+            return leaders
+        return leaders[: self.top]
 
     @staticmethod
     def make_leader_key(leaders: list[dict]) -> tuple[tuple[str, str, str], ...]:
@@ -210,7 +216,7 @@ class AltcoinWebSocketMonitor:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Monitor altcoin strategies with Binance Futures WebSocket")
-    parser.add_argument("--top", type=int, default=5, help="number of latest altcoin leaders to monitor")
+    parser.add_argument("--top", type=int, default=0, help="number of latest altcoin leaders to monitor; 0 means all")
     parser.add_argument("--candle-limit", type=int, default=220, help="candles per strategy cycle")
     parser.add_argument("--print-seconds", type=int, default=5, help="seconds between real-time price prints")
     parser.add_argument("--reconnect-seconds", type=int, default=5, help="seconds to wait before reconnecting")

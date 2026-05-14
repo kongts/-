@@ -33,9 +33,10 @@ def run_once(args: argparse.Namespace) -> None:
     )
     if rows:
         write_csv(Path(args.output), rows)
-        write_latest_json(rows, Path(args.latest_json), args.show)
+        write_latest_json(rows, Path(args.latest_json), args.min_score, args.max_leaders)
         print_summary(rows, args.show)
-        for item in rows[: args.show]:
+        selected = select_latest_leaders(rows, args.min_score, args.max_leaders)
+        for item in selected[: args.show]:
             log(
                 f"rank={item.rank} volume_rank={item.volume_rank} symbol={item.symbol} "
                 f"strategy={item.strategy_id}/{item.timeframe} return={item.return_pct:.2f}% "
@@ -43,7 +44,11 @@ def run_once(args: argparse.Namespace) -> None:
                 f"win={item.win_rate:.0%} pf={item.profit_factor:.2f} score={item.score:.2f}"
             )
         positive = [item for item in rows if item.return_pct > 0 and item.trade_count > 0]
-        log(f"summary tested={len(rows)} positive={len(positive)} csv={args.output} latest_json={args.latest_json}")
+        log(
+            f"summary tested={len(rows)} positive={len(positive)} selected={len(selected)} "
+            f"min_score={args.min_score:.2f} max_leaders={args.max_leaders} "
+            f"csv={args.output} latest_json={args.latest_json}"
+        )
     else:
         log("no altcoin rows generated")
 
@@ -56,11 +61,23 @@ def log(message: str) -> None:
         fh.write(line + "\n")
 
 
-def write_latest_json(rows, path: Path, show: int) -> None:
+def select_latest_leaders(rows, min_score: float, max_leaders: int) -> list:
+    selected = [item for item in rows if item.score >= min_score]
+    if max_leaders > 0:
+        return selected[:max_leaders]
+    return selected
+
+
+def write_latest_json(rows, path: Path, min_score: float, max_leaders: int) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    leaders = select_latest_leaders(rows, min_score, max_leaders)
     payload = {
         "updated_at": datetime.now().isoformat(timespec="seconds"),
-        "top_count": min(show, len(rows)),
+        "selection_mode": "score_threshold",
+        "min_score": min_score,
+        "max_leaders": max_leaders,
+        "tested_count": len(rows),
+        "leader_count": len(leaders),
         "leaders": [
             {
                 "rank": item.rank,
@@ -77,7 +94,7 @@ def write_latest_json(rows, path: Path, show: int) -> None:
                 "profit_factor": finite_or_inf(item.profit_factor),
                 "score": item.score,
             }
-            for item in rows[:show]
+            for item in leaders
         ],
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -107,6 +124,8 @@ def main() -> None:
     parser.add_argument("--stop-loss-pct", type=float, default=0.025, help="stop loss percentage, e.g. 0.025 = 2.5%%")
     parser.add_argument("--take-profit-pct", type=float, default=0.06, help="take profit percentage, e.g. 0.06 = 6%%")
     parser.add_argument("--show", type=int, default=30, help="number of rows to print")
+    parser.add_argument("--min-score", type=float, default=1.0, help="write all rows with score >= this value to latest-json")
+    parser.add_argument("--max-leaders", type=int, default=0, help="cap latest-json leaders; 0 means no cap")
     parser.add_argument(
         "--output",
         default="quant_futures_bot/data/altcoin_top100_rolling_backtest.csv",

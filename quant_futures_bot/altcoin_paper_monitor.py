@@ -99,8 +99,12 @@ class AltcoinPaperMonitor:
     def run_once(self) -> None:
         leaders = self.load_leaders()
         cycle_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.log(f"[{cycle_started_at}] start altcoin {self.execution_mode} cycle leaders={len(leaders)} top={self.top}")
-        sync_symbols = sorted({leader["symbol"] for leader in leaders[: self.top]} | set(self.pending_orders))
+        selected_leaders = self.select_leaders(leaders)
+        self.log(
+            f"[{cycle_started_at}] start altcoin {self.execution_mode} cycle "
+            f"leaders={len(leaders)} selected={len(selected_leaders)} top={self.top}"
+        )
+        sync_symbols = sorted({leader["symbol"] for leader in selected_leaders} | set(self.pending_orders))
         self.sync_exchange_account(sync_symbols)
         self.manage_pending_orders()
         self.sync_exchange_account(sync_symbols)
@@ -110,7 +114,7 @@ class AltcoinPaperMonitor:
         rejected = 0
         exchange_order_ids: list[str] = []
         market_contexts: list[dict] = []
-        for leader in leaders[: self.top]:
+        for leader in selected_leaders:
             symbol = leader["symbol"]
             strategy_id = leader["strategy_id"]
             timeframe = leader["timeframe"]
@@ -418,6 +422,11 @@ class AltcoinPaperMonitor:
         payload = json.loads(self.strategy_path.read_text(encoding="utf-8"))
         return list(payload.get("leaders", []))
 
+    def select_leaders(self, leaders: list[dict]) -> list[dict]:
+        if self.top <= 0:
+            return leaders
+        return leaders[: self.top]
+
     def load_portfolio(self) -> Portfolio:
         if self.state_path.exists():
             try:
@@ -527,7 +536,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run paper/testnet trading monitor for latest altcoin aggressive strategies")
     parser.add_argument("--run-once", action="store_true", help="run once and exit")
     parser.add_argument("--interval-minutes", type=float, default=15.0, help="minutes between paper cycles")
-    parser.add_argument("--top", type=int, default=5, help="number of latest leaders to paper trade")
+    parser.add_argument("--top", type=int, default=5, help="number of latest leaders to trade; 0 means all")
     parser.add_argument("--candle-limit", type=int, default=220, help="candles per symbol/timeframe")
     parser.add_argument("--max-margin-ratio", type=float, default=0.03, help="margin ratio per symbol")
     parser.add_argument("--leverage", type=int, default=2, help="paper leverage")

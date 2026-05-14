@@ -129,7 +129,7 @@ sudo systemctl disable quant-optimizer.timer
 
 ### 山寨币策略优化
 
-用途：每 1 小时抓取 Binance USDT 合约交易量前 100，滚动回测山寨币激进策略。
+用途：每 1 小时抓取 Binance USDT 合约交易量前 100，滚动回测山寨币激进策略，并把所有 `score >= 1.0` 的组合写入最新策略文件。
 
 启动：
 
@@ -215,7 +215,7 @@ sudo systemctl disable quant-altcoin-paper.timer
 
 ### 山寨币 Testnet WebSocket 盯盘
 
-用途：实时订阅最新山寨币排名前 5 的 bookTicker；每到对应 15m/30m K 线收盘运行策略；每 30 秒维护挂单超时、撤单和暂停状态。
+用途：实时订阅所有评分达标的山寨币 bookTicker；每到对应 15m/30m K 线收盘运行策略；每 30 秒维护挂单超时、撤单和暂停状态。
 
 启动：
 
@@ -338,6 +338,8 @@ sudo systemctl enable --now quant-altcoin-paper.timer
 
 山寨币 Testnet 只做限价挂单：
 
+- 运行范围不再限制前 5，而是所有回测 `score >= 1.0` 的组合。
+- `--top 0` 表示不限数量，读取 `altcoin_strategy_latest.json` 里的全部达标组合。
 - `--order-type limit`
 - `--maker-offset 0.001`
 - post-only 提交，避免直接吃单。
@@ -351,7 +353,7 @@ sudo systemctl enable --now quant-altcoin-paper.timer
 手动运行完整命令：
 
 ```bash
-/opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.altcoin_paper_monitor --run-once --top 5 --candle-limit 220 --execution-mode testnet --confirm-exchange-orders YES --order-type limit --maker-offset 0.001 --crash-watch-drop-pct 0.03 --crash-watch-breadth-ratio 0.6 --crash-short-trailing-pct 0.03 --open-order-timeout-seconds 180 --close-order-timeout-seconds 60 --max-order-failures 3
+/opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.altcoin_paper_monitor --run-once --top 0 --candle-limit 220 --execution-mode testnet --confirm-exchange-orders YES --order-type limit --maker-offset 0.001 --crash-watch-drop-pct 0.03 --crash-watch-breadth-ratio 0.6 --crash-short-trailing-pct 0.03 --open-order-timeout-seconds 180 --close-order-timeout-seconds 60 --max-order-failures 3
 ```
 
 看到下面内容，表示已经向交易所测试盘提交限价挂单：

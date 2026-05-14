@@ -8,7 +8,7 @@ Binance Futures Demo/Testnet 量化交易项目。
 - `quant-optimizer.timer`：每 4 小时优化 BTC/ETH/SOL 主策略。
 - `quant-altcoin-optimizer.timer`：每 1 小时滚动回测山寨币激进策略。
 - `quant-altcoin-paper.timer`：每 15 分钟运行山寨币 paper 模拟。
-- `quant-altcoin-websocket.service`：WebSocket 实时盯盘最新山寨币排名，并在 K 线收盘时提交 Testnet 限价挂单。
+- `quant-altcoin-websocket.service`：WebSocket 实时盯盘所有评分达标的山寨币，并在 K 线收盘时提交 Testnet 限价挂单。
 - `quant-altcoin-testnet.timer`：备用周期检查，每 15 分钟运行一次山寨币 Testnet 逻辑。
 
 ## 安装
@@ -126,7 +126,7 @@ sudo systemctl disable quant-optimizer.timer
 
 ### 山寨币策略优化定时器
 
-用途：每 1 小时抓取 Binance USDT 合约交易量前 100，滚动回测山寨币激进策略。
+用途：每 1 小时抓取 Binance USDT 合约交易量前 100，滚动回测山寨币激进策略，并把所有 `score >= 1.0` 的组合写入最新策略文件。
 
 启动：
 
@@ -212,7 +212,7 @@ sudo systemctl disable quant-altcoin-paper.timer
 
 ### 山寨币 Testnet WebSocket 盯盘
 
-用途：实时订阅最新山寨币排名前 5 的 bookTicker；每到对应 15m/30m K 线收盘运行策略；每 30 秒维护挂单超时、撤单和暂停状态。
+用途：实时订阅所有评分达标的山寨币 bookTicker；每到对应 15m/30m K 线收盘运行策略；每 30 秒维护挂单超时、撤单和暂停状态。
 
 启动：
 
@@ -361,6 +361,8 @@ run_altcoin_paper_once.bat
 
 山寨币 Testnet 只做限价挂单：
 
+- 运行范围不再限制前 5，而是所有回测 `score >= 1.0` 的组合。
+- `--top 0` 表示不限数量，读取 `altcoin_strategy_latest.json` 里的全部达标组合。
 - 不使用市价单。
 - 使用 post-only 参数，避免直接吃单。
 - 买单价格约低于信号价 `0.1%`。
@@ -432,5 +434,5 @@ python -m quant_futures_bot.altcoin_top_volume_backtest --top 100 --limit 500 --
 山寨币滚动优化：
 
 ```bash
-python -m quant_futures_bot.auto_altcoin_optimizer
+python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 100 --limit 500 --timeframes 15m,30m --show 30 --min-score 1.0 --max-leaders 0
 ```
