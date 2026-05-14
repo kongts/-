@@ -185,12 +185,10 @@ class AltcoinPaperMonitor:
         self.save_runtime_state()
         self.write_latest(signals_created, orders_created, fills_created, rejected, exchange_order_ids)
         self.log(
-            f"{self.execution_mode}_summary equity={self.portfolio.equity:.2f} used_margin={self.portfolio.used_margin:.2f} "
-            f"unrealized={self.portfolio.unrealized_pnl:.2f} realized={self.portfolio.realized_pnl:.2f} "
+            f"{self.execution_mode}_summary {self.account_summary()} "
             f"signals={signals_created} orders={orders_created} fills={fills_created} rejected={rejected} order_type={self.order_type} "
             f"exchange_order_ids={','.join(exchange_order_ids) or '-'} exchange_open_orders={self.exchange_open_order_count} "
-            f"pending_orders={len(self.pending_orders)} paused_symbols={len(self.paused_symbols)} "
-            f"exchange_positions={self.exchange_positions_summary} positions={self.format_positions()}"
+            f"pending_orders={len(self.pending_orders)} paused_symbols={len(self.paused_symbols)}"
         )
 
     def maintain_orders(self, symbols: list[str]) -> None:
@@ -203,10 +201,9 @@ class AltcoinPaperMonitor:
         self.save_runtime_state()
         self.write_latest(0, 0, 0, 0, [])
         self.log(
-            f"{self.execution_mode}_maintenance equity={self.portfolio.equity:.2f} used_margin={self.portfolio.used_margin:.2f} "
-            f"unrealized={self.portfolio.unrealized_pnl:.2f} exchange_open_orders={self.exchange_open_order_count} "
-            f"pending_orders={len(self.pending_orders)} paused_symbols={len(self.paused_symbols)} "
-            f"exchange_positions={self.exchange_positions_summary}"
+            f"{self.execution_mode}_maintenance {self.account_summary()} "
+            f"exchange_open_orders={self.exchange_open_order_count} pending_orders={len(self.pending_orders)} "
+            f"paused_symbols={len(self.paused_symbols)}"
         )
 
     def sync_exchange_account(self, symbols: list[str]) -> None:
@@ -526,6 +523,14 @@ class AltcoinPaperMonitor:
                     f"{symbol}:{pos.position_side} qty={pos.qty:.6f} entry={pos.entry_price:.6f} pnl={pos.unrealized_pnl:.2f}"
                 )
         return ";".join(active) or "-"
+
+    def account_summary(self) -> str:
+        return (
+            f"equity={self.portfolio.equity:.2f} cash={self.portfolio.cash:.2f} "
+            f"available={self.portfolio.available_balance:.2f} used_margin={self.portfolio.used_margin:.2f} "
+            f"unrealized={self.portfolio.unrealized_pnl:.2f} realized={self.portfolio.realized_pnl:.2f} "
+            f"exchange_positions={self.exchange_positions_summary} local_positions={self.format_positions()}"
+        )
 
     @staticmethod
     def format_exchange_positions(positions: dict[str, dict]) -> str:

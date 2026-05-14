@@ -165,11 +165,10 @@ class AltcoinWebSocketMonitor:
         return True
 
     def print_tick(self) -> None:
-        prices = ",".join(f"{symbol}={price:.6f}" for symbol, price in sorted(self.prices.items())) or "-"
         print(
-            f"[{self.now()}] altcoin_websocket_tick prices={prices} "
-            f"equity={self.monitor.portfolio.equity:.2f} pending_orders={len(self.monitor.pending_orders)} "
-            f"paused_symbols={len(self.monitor.paused_symbols)} exchange_positions={self.monitor.exchange_positions_summary}",
+            f"[{self.now()}] altcoin_account {self.monitor.account_summary()} "
+            f"watched_symbols={len(self.symbols())} priced_symbols={len(self.prices)} "
+            f"pending_orders={len(self.monitor.pending_orders)} paused_symbols={len(self.monitor.paused_symbols)}",
             flush=True,
         )
 
