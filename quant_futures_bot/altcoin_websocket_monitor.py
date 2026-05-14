@@ -188,9 +188,7 @@ class AltcoinWebSocketMonitor:
 
     def selected_leaders(self) -> list[dict]:
         leaders = self.monitor.load_leaders()
-        if self.top <= 0:
-            return leaders
-        return leaders[: self.top]
+        return self.monitor.select_leaders(leaders)
 
     @staticmethod
     def make_leader_key(leaders: list[dict]) -> tuple[tuple[str, str, str], ...]:

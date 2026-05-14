@@ -95,6 +95,7 @@ class AltcoinPaperMonitor:
         self.order_manager = OrderManager()
         self.exchange_open_order_count = 0
         self.exchange_positions_summary = "-"
+        self.unsupported_symbols_logged: set[str] = set()
 
     def run_once(self) -> None:
         leaders = self.load_leaders()
@@ -213,7 +214,7 @@ class AltcoinPaperMonitor:
             self.exchange_open_order_count = 0
             self.exchange_positions_summary = "-"
             return
-        snapshot = self.account_sync.fetch(symbols)
+        snapshot = self.account_sync.fetch(self.filter_supported_symbols(symbols))
         self.exchange_open_order_count = snapshot.open_order_count
         self.portfolio.sync_from_exchange(snapshot.to_portfolio_payload())
         self.exchange_positions_summary = self.format_exchange_positions(snapshot.positions or {})
@@ -423,9 +424,23 @@ class AltcoinPaperMonitor:
         return list(payload.get("leaders", []))
 
     def select_leaders(self, leaders: list[dict]) -> list[dict]:
+        tradable = [leader for leader in leaders if self.is_supported_symbol(str(leader.get("symbol") or ""))]
         if self.top <= 0:
-            return leaders
-        return leaders[: self.top]
+            return tradable
+        return tradable[: self.top]
+
+    def filter_supported_symbols(self, symbols: list[str]) -> list[str]:
+        return [symbol for symbol in symbols if self.is_supported_symbol(symbol)]
+
+    def is_supported_symbol(self, symbol: str) -> bool:
+        if not symbol or not isinstance(self.execution, BinanceTestnetExecution):
+            return True
+        if symbol in self.execution.exchange.markets:
+            return True
+        if symbol not in self.unsupported_symbols_logged:
+            self.unsupported_symbols_logged.add(symbol)
+            self.log(f"symbol_skipped symbol={symbol} reason=not supported by Binance REST market list")
+        return False
 
     def load_portfolio(self) -> Portfolio:
         if self.state_path.exists():
