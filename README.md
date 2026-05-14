@@ -448,13 +448,13 @@ python -m quant_futures_bot.strategy_optimizer
 山寨币交易量前 100 回测：
 
 ```bash
-python -m quant_futures_bot.altcoin_top_volume_backtest --top 100 --limit 500 --timeframes 15m,30m --show 30 --fee-rate 0.0002 --funding-cost-rate-per-8h 0.0001
+python -m quant_futures_bot.altcoin_top_volume_backtest --top 100 --limit 1000 --timeframes 15m,30m --show 30 --min-trades 8 --min-side-ratio 0.20 --fold-count 4 --min-profitable-fold-ratio 1.0 --fee-rate 0.0002 --funding-cost-rate-per-8h 0.0001
 ```
 
 山寨币滚动优化：
 
 ```bash
-python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 100 --limit 500 --timeframes 15m,30m --show 30 --min-score 1.0 --max-leaders 0 --fee-rate 0.0002 --funding-cost-rate-per-8h 0.0001
+python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 100 --limit 1000 --timeframes 15m,30m --show 30 --min-score 1.0 --max-leaders 0 --min-trades 8 --min-side-ratio 0.20 --fold-count 4 --min-profitable-fold-ratio 1.0 --fee-rate 0.0002 --funding-cost-rate-per-8h 0.0001
 ```
 
-山寨币回测默认按挂单 maker 手续费 `0.02%` 估算，并按每 8 小时 `0.01%` 的保守资金费成本扣减持仓名义价值。输出里的 `funding` 表示本次回测扣掉的资金费估算值。
+山寨币回测默认拉长到 `1000` 根 K，并要求至少 `8` 笔平仓交易、较少方向交易占比不低于 `20%`、最近 `4` 段样本全部盈利。输出会拆分 `L/S`、`Lpnl`、`Spnl`、`side`、`folds`，同时按挂单 maker 手续费 `0.02%` 和每 8 小时 `0.01%` 的保守资金费成本扣减。

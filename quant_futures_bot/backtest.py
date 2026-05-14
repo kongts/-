@@ -32,6 +32,10 @@ class BacktestResult:
     long_win_rate: float
     short_win_rate: float
     trade_count: int
+    long_trade_count: int
+    short_trade_count: int
+    long_pnl: float
+    short_pnl: float
     profit_factor: float
     max_consecutive_losses: int
     pause_count: int
@@ -221,6 +225,10 @@ class Backtester:
             long_win_rate=self._win_rate(long_pnls),
             short_win_rate=self._win_rate(short_pnls),
             trade_count=len(pnls),
+            long_trade_count=len(long_pnls),
+            short_trade_count=len(short_pnls),
+            long_pnl=sum(long_pnls),
+            short_pnl=sum(short_pnls),
             profit_factor=profit_factor,
             max_consecutive_losses=self._max_consecutive_losses(pnls),
             pause_count=self.pause_count,
@@ -262,6 +270,10 @@ def main() -> None:
     print(f"long_win_rate={result.long_win_rate:.2%}")
     print(f"short_win_rate={result.short_win_rate:.2%}")
     print(f"trade_count={result.trade_count}")
+    print(f"long_trade_count={result.long_trade_count}")
+    print(f"short_trade_count={result.short_trade_count}")
+    print(f"long_pnl={result.long_pnl:.4f}")
+    print(f"short_pnl={result.short_pnl:.4f}")
     print(f"profit_factor={result.profit_factor:.2f}")
     print(f"max_consecutive_losses={result.max_consecutive_losses}")
     print(f"pause_count={result.pause_count}")

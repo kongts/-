@@ -24,7 +24,9 @@ def run_once(args: argparse.Namespace) -> None:
         f"extended_hold_15m={args.extended_hold_bars_15m} extended_hold_30m={args.extended_hold_bars_30m} "
         f"min_profit_to_extend={args.min_profit_to_extend:.2%} trailing_after_max_hold={args.trailing_after_max_hold_pct:.2%} "
         f"fee_rate={args.fee_rate:.4%} funding_cost_per_8h={args.funding_cost_rate_per_8h:.4%} "
-        f"fetch_timeout_ms={args.fetch_timeout_ms} fetch_retries={args.fetch_retries}"
+        f"fetch_timeout_ms={args.fetch_timeout_ms} fetch_retries={args.fetch_retries} "
+        f"min_trades={args.min_trades} min_side_ratio={args.min_side_ratio:.0%} "
+        f"fold_count={args.fold_count} min_profitable_fold_ratio={args.min_profitable_fold_ratio:.0%}"
     )
     rows = backtest_top_volume(
         top=args.top,
@@ -46,10 +48,14 @@ def run_once(args: argparse.Namespace) -> None:
         funding_cost_rate_per_8h=args.funding_cost_rate_per_8h,
         fetch_timeout_ms=args.fetch_timeout_ms,
         fetch_retries=args.fetch_retries,
+        min_trades=args.min_trades,
+        min_side_ratio=args.min_side_ratio,
+        fold_count=args.fold_count,
+        min_profitable_fold_ratio=args.min_profitable_fold_ratio,
     )
     if rows:
         write_csv(Path(args.output), rows)
-        write_latest_json(rows, Path(args.latest_json), args.min_score, args.max_leaders, args.fee_rate, args.funding_cost_rate_per_8h)
+        write_latest_json(rows, Path(args.latest_json), args)
         print_summary(rows, args.show)
         selected = select_latest_leaders(rows, args.min_score, args.max_leaders)
         for item in selected[: args.show]:
@@ -57,6 +63,8 @@ def run_once(args: argparse.Namespace) -> None:
                 f"rank={item.rank} volume_rank={item.volume_rank} symbol={item.symbol} "
                 f"strategy={item.strategy_id}/{item.timeframe} return={item.return_pct:.2f}% "
                 f"dd={item.max_drawdown:.2%} sharpe={item.sharpe:.2f} trades={item.trade_count} "
+                f"L/S={item.long_trade_count}/{item.short_trade_count} Lpnl={item.long_pnl:.2f} Spnl={item.short_pnl:.2f} "
+                f"side={item.side_balance_ratio:.0%} folds={item.profitable_fold_ratio:.0%} "
                 f"win={item.win_rate:.0%} pf={item.profit_factor:.2f} funding={item.funding_cost:.2f} "
                 f"score={item.score:.2f}"
             )
@@ -123,16 +131,20 @@ def select_latest_leaders(rows, min_score: float, max_leaders: int) -> list:
     return selected
 
 
-def write_latest_json(rows, path: Path, min_score: float, max_leaders: int, fee_rate: float, funding_cost_rate_per_8h: float) -> None:
+def write_latest_json(rows, path: Path, args: argparse.Namespace) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    leaders = select_latest_leaders(rows, min_score, max_leaders)
+    leaders = select_latest_leaders(rows, args.min_score, args.max_leaders)
     payload = {
         "updated_at": datetime.now().isoformat(timespec="seconds"),
         "selection_mode": "score_threshold",
-        "min_score": min_score,
-        "max_leaders": max_leaders,
-        "fee_rate": fee_rate,
-        "funding_cost_rate_per_8h": funding_cost_rate_per_8h,
+        "min_score": args.min_score,
+        "max_leaders": args.max_leaders,
+        "min_trades": args.min_trades,
+        "min_side_ratio": args.min_side_ratio,
+        "fold_count": args.fold_count,
+        "min_profitable_fold_ratio": args.min_profitable_fold_ratio,
+        "fee_rate": args.fee_rate,
+        "funding_cost_rate_per_8h": args.funding_cost_rate_per_8h,
         "tested_count": len(rows),
         "leader_count": len(leaders),
         "leaders": [
@@ -147,6 +159,12 @@ def write_latest_json(rows, path: Path, min_score: float, max_leaders: int, fee_
                 "max_drawdown": item.max_drawdown,
                 "sharpe": item.sharpe,
                 "trade_count": item.trade_count,
+                "long_trade_count": item.long_trade_count,
+                "short_trade_count": item.short_trade_count,
+                "long_pnl": item.long_pnl,
+                "short_pnl": item.short_pnl,
+                "side_balance_ratio": item.side_balance_ratio,
+                "profitable_fold_ratio": item.profitable_fold_ratio,
                 "win_rate": item.win_rate,
                 "profit_factor": finite_or_inf(item.profit_factor),
                 "funding_cost": item.funding_cost,
@@ -169,7 +187,7 @@ def main() -> None:
     parser.add_argument("--run-once", action="store_true", help="run once and exit")
     parser.add_argument("--run-once-first", action="store_true", help="run immediately before waiting")
     parser.add_argument("--top", type=int, default=100, help="number of top-volume USDT perpetual symbols")
-    parser.add_argument("--limit", type=int, default=500, help="candles per symbol/timeframe")
+    parser.add_argument("--limit", type=int, default=1000, help="candles per symbol/timeframe")
     parser.add_argument("--timeframes", default="15m,30m", help="comma-separated timeframes")
     parser.add_argument(
         "--strategies",
@@ -196,6 +214,10 @@ def main() -> None:
     )
     parser.add_argument("--fetch-timeout-ms", type=int, default=15000, help="ccxt request timeout in milliseconds")
     parser.add_argument("--fetch-retries", type=int, default=1, help="OHLCV fetch retry count per symbol/timeframe")
+    parser.add_argument("--min-trades", type=int, default=8, help="minimum closed trades required to qualify")
+    parser.add_argument("--min-side-ratio", type=float, default=0.20, help="minimum smaller-side trade ratio, e.g. 0.2 prevents one-sided overfit")
+    parser.add_argument("--fold-count", type=int, default=4, help="number of recent equity folds for stability check")
+    parser.add_argument("--min-profitable-fold-ratio", type=float, default=1.0, help="minimum ratio of profitable folds")
     parser.add_argument("--lock-timeout-minutes", type=float, default=120.0, help="remove optimizer lock after this many minutes")
     parser.add_argument("--show", type=int, default=30, help="number of rows to print")
     parser.add_argument("--min-score", type=float, default=1.0, help="write all rows with score >= this value to latest-json")

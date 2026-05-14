@@ -53,6 +53,12 @@ class AltcoinBacktestScore:
     max_drawdown: float
     sharpe: float
     trade_count: int
+    long_trade_count: int
+    short_trade_count: int
+    long_pnl: float
+    short_pnl: float
+    side_balance_ratio: float
+    profitable_fold_ratio: float
     win_rate: float
     profit_factor: float
     funding_cost: float
@@ -130,13 +136,51 @@ def run_backtest(
     ).run()
 
 
-def score_result(result: BacktestResult) -> float:
+def score_result(
+    result: BacktestResult,
+    min_trades: int,
+    min_side_ratio: float,
+    min_profitable_fold_ratio: float,
+    fold_count: int,
+) -> float:
     if result.trade_count == 0:
         return -999.0
+    side_balance = side_balance_ratio(result)
+    profitable_folds = profitable_fold_ratio(result.equity_curve, fold_count)
+    if result.trade_count < min_trades:
+        return -999.0
+    if side_balance < min_side_ratio:
+        return -999.0
+    if profitable_folds < min_profitable_fold_ratio:
+        return -999.0
     trade_bonus = min(result.trade_count, 30) * 0.08
-    low_trade_penalty = 8.0 if result.trade_count < 4 else 0.0
     drawdown_penalty = result.max_drawdown * 100 * 2.5
-    return result.return_pct + result.sharpe * 0.35 + trade_bonus - drawdown_penalty - low_trade_penalty
+    side_balance_bonus = side_balance * 2.0
+    fold_bonus = profitable_folds * 3.0
+    return result.return_pct + result.sharpe * 0.35 + trade_bonus + side_balance_bonus + fold_bonus - drawdown_penalty
+
+
+def side_balance_ratio(result: BacktestResult) -> float:
+    if result.trade_count <= 0:
+        return 0.0
+    return min(result.long_trade_count, result.short_trade_count) / result.trade_count
+
+
+def profitable_fold_ratio(equity_curve: list[float], fold_count: int) -> float:
+    if not equity_curve or fold_count <= 0:
+        return 0.0
+    fold_size = max(1, len(equity_curve) // fold_count)
+    profitable = 0
+    tested = 0
+    for idx in range(fold_count):
+        start = idx * fold_size
+        end = len(equity_curve) if idx == fold_count - 1 else min(len(equity_curve), (idx + 1) * fold_size)
+        if end - start < 2:
+            continue
+        tested += 1
+        if equity_curve[end - 1] > equity_curve[start]:
+            profitable += 1
+    return profitable / tested if tested else 0.0
 
 
 def backtest_top_volume(
@@ -159,6 +203,10 @@ def backtest_top_volume(
     funding_cost_rate_per_8h: float,
     fetch_timeout_ms: int,
     fetch_retries: int,
+    min_trades: int,
+    min_side_ratio: float,
+    fold_count: int,
+    min_profitable_fold_ratio: float,
 ) -> list[AltcoinBacktestScore]:
     provider = MarketDataProvider(use_exchange=True, fallback_to_synthetic=False)
     if provider.exchange is not None:
@@ -200,6 +248,8 @@ def backtest_top_volume(
                 except Exception as exc:
                     print(f"backtest_error symbol={symbol} strategy={strategy_id}/{timeframe} error={exc}", flush=True)
                     continue
+                balance = side_balance_ratio(result)
+                fold_ratio = profitable_fold_ratio(result.equity_curve, fold_count)
                 scores.append(
                     AltcoinBacktestScore(
                         rank=0,
@@ -213,10 +263,16 @@ def backtest_top_volume(
                         max_drawdown=result.max_drawdown,
                         sharpe=result.sharpe,
                         trade_count=result.trade_count,
+                        long_trade_count=result.long_trade_count,
+                        short_trade_count=result.short_trade_count,
+                        long_pnl=result.long_pnl,
+                        short_pnl=result.short_pnl,
+                        side_balance_ratio=balance,
+                        profitable_fold_ratio=fold_ratio,
                         win_rate=result.win_rate,
                         profit_factor=result.profit_factor,
                         funding_cost=result.funding_cost,
-                        score=score_result(result),
+                        score=score_result(result, min_trades, min_side_ratio, min_profitable_fold_ratio, fold_count),
                     )
                 )
     scores.sort(key=lambda item: item.score, reverse=True)
@@ -261,6 +317,8 @@ def print_summary(rows: list[AltcoinBacktestScore], top_n: int) -> None:
             f"{item.rank}. volume_rank={item.volume_rank} {item.symbol} "
             f"{item.strategy_id}/{item.timeframe} return={item.return_pct:.2f}% "
             f"dd={item.max_drawdown:.2%} sharpe={item.sharpe:.2f} trades={item.trade_count} "
+            f"L/S={item.long_trade_count}/{item.short_trade_count} Lpnl={item.long_pnl:.2f} Spnl={item.short_pnl:.2f} "
+            f"side={item.side_balance_ratio:.0%} folds={item.profitable_fold_ratio:.0%} "
             f"win={item.win_rate:.0%} pf={item.profit_factor:.2f} funding={item.funding_cost:.2f} "
             f"score={item.score:.2f}"
         )
@@ -293,7 +351,7 @@ def max_hold_bars_for_timeframe(timeframe: str, max_hold_bars_15m: int, max_hold
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backtest aggressive strategies on top Binance USDT perpetuals by 24h volume")
     parser.add_argument("--top", type=int, default=100, help="number of top-volume USDT perpetual symbols")
-    parser.add_argument("--limit", type=int, default=500, help="candles per symbol/timeframe")
+    parser.add_argument("--limit", type=int, default=1000, help="candles per symbol/timeframe")
     parser.add_argument("--timeframes", default="15m,30m", help="comma-separated timeframes")
     parser.add_argument("--strategies", default=",".join(DEFAULT_STRATEGIES), help="comma-separated strategy ids")
     parser.add_argument("--include-majors", action="store_true", help="include BTC/ETH and stablecoin-like symbols")
@@ -316,6 +374,10 @@ def main() -> None:
     )
     parser.add_argument("--fetch-timeout-ms", type=int, default=15000, help="ccxt request timeout in milliseconds")
     parser.add_argument("--fetch-retries", type=int, default=1, help="OHLCV fetch retry count per symbol/timeframe")
+    parser.add_argument("--min-trades", type=int, default=8, help="minimum closed trades required to qualify")
+    parser.add_argument("--min-side-ratio", type=float, default=0.20, help="minimum smaller-side trade ratio, e.g. 0.2 prevents one-sided overfit")
+    parser.add_argument("--fold-count", type=int, default=4, help="number of recent equity folds for stability check")
+    parser.add_argument("--min-profitable-fold-ratio", type=float, default=1.0, help="minimum ratio of profitable folds")
     parser.add_argument("--show", type=int, default=30, help="number of rows to print")
     parser.add_argument("--output", default="quant_futures_bot/data/altcoin_top_volume_backtest.csv", help="CSV output path")
     args = parser.parse_args()
@@ -342,6 +404,10 @@ def main() -> None:
         funding_cost_rate_per_8h=args.funding_cost_rate_per_8h,
         fetch_timeout_ms=args.fetch_timeout_ms,
         fetch_retries=args.fetch_retries,
+        min_trades=args.min_trades,
+        min_side_ratio=args.min_side_ratio,
+        fold_count=args.fold_count,
+        min_profitable_fold_ratio=args.min_profitable_fold_ratio,
     )
     if rows:
         output = Path(args.output)
