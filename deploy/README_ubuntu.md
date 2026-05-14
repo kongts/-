@@ -353,11 +353,13 @@ sudo systemctl enable --now quant-altcoin-paper.timer
 - `30m` 策略最长持仓 `6` 根 K 线，约 `3` 小时。
 - 超过最长持仓时，如果浮盈不足 `3%`，挂单平仓。
 - 超过最长持仓且浮盈达到 `3%`，切换为 `3%` 追踪止盈继续持有。
+- 进入追踪止盈后仍有二次最长持仓：`15m` 再延长 `4` 根 K，`30m` 再延长 `3` 根 K。
+- 二次最长持仓到期仍未触发追踪止盈，会直接挂单平仓。
 
 手动运行完整命令：
 
 ```bash
-/opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.altcoin_paper_monitor --run-once --top 0 --candle-limit 220 --execution-mode testnet --confirm-exchange-orders YES --order-type limit --maker-offset 0.001 --crash-watch-drop-pct 0.03 --crash-watch-breadth-ratio 0.6 --crash-short-trailing-pct 0.03 --open-order-timeout-seconds 180 --close-order-timeout-seconds 60 --max-order-failures 3 --max-hold-bars-15m 8 --max-hold-bars-30m 6 --min-profit-to-extend 0.03 --trailing-after-max-hold-pct 0.03
+/opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.altcoin_paper_monitor --run-once --top 0 --candle-limit 220 --execution-mode testnet --confirm-exchange-orders YES --order-type limit --maker-offset 0.001 --crash-watch-drop-pct 0.03 --crash-watch-breadth-ratio 0.6 --crash-short-trailing-pct 0.03 --open-order-timeout-seconds 180 --close-order-timeout-seconds 60 --max-order-failures 3 --max-hold-bars-15m 8 --max-hold-bars-30m 6 --extended-hold-bars-15m 4 --extended-hold-bars-30m 3 --min-profit-to-extend 0.03 --trailing-after-max-hold-pct 0.03
 ```
 
 看到下面内容，表示已经向交易所测试盘提交限价挂单：

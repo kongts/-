@@ -51,6 +51,7 @@ class Backtester:
         max_hold_bars: int = 0,
         min_profit_to_extend: float = 0.03,
         trailing_after_max_hold_pct: float = 0.03,
+        extended_hold_bars: int = 0,
     ) -> None:
         self.data_provider = MarketDataProvider(use_exchange=not offline, fallback_to_synthetic=offline)
         self.strategy_manager = StrategyManager(strategy_id=strategy_id, use_saved_selection=strategy_id is None)
@@ -62,6 +63,7 @@ class Backtester:
         self.max_hold_bars = max_hold_bars
         self.min_profit_to_extend = min_profit_to_extend
         self.trailing_after_max_hold_pct = trailing_after_max_hold_pct
+        self.extended_hold_bars = extended_hold_bars
         self.order_manager = OrderManager()
         self.execution = PaperExecution()
         self.portfolio = Portfolio()
@@ -160,6 +162,9 @@ class Backtester:
                 if peak - change >= self.trailing_after_max_hold_pct:
                     self.max_hold_profit_peaks.pop(symbol, None)
                     return SignalEvent(symbol, close_type, "Max Hold Trailing Take Profit", price)
+                if self.extended_hold_bars > 0 and held_bars >= self.max_hold_bars + self.extended_hold_bars:
+                    self.max_hold_profit_peaks.pop(symbol, None)
+                    return SignalEvent(symbol, close_type, "Extended Max Hold Time", price)
                 return None
         if self.take_profit_pct > 0 and change >= self.take_profit_pct:
             self.max_hold_profit_peaks.pop(symbol, None)

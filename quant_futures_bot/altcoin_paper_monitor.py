@@ -46,6 +46,8 @@ class AltcoinPaperMonitor:
         max_order_failures: int = 3,
         max_hold_bars_15m: int = 8,
         max_hold_bars_30m: int = 6,
+        extended_hold_bars_15m: int = 4,
+        extended_hold_bars_30m: int = 3,
         min_profit_to_extend: float = 0.03,
         trailing_after_max_hold_pct: float = 0.03,
         execution_mode: str = "paper",
@@ -88,6 +90,8 @@ class AltcoinPaperMonitor:
         self.max_order_failures = max_order_failures
         self.max_hold_bars_15m = max_hold_bars_15m
         self.max_hold_bars_30m = max_hold_bars_30m
+        self.extended_hold_bars_15m = extended_hold_bars_15m
+        self.extended_hold_bars_30m = extended_hold_bars_30m
         self.min_profit_to_extend = min_profit_to_extend
         self.trailing_after_max_hold_pct = trailing_after_max_hold_pct
         self.data_provider = MarketDataProvider(use_exchange=True, fallback_to_synthetic=False)
@@ -307,6 +311,7 @@ class AltcoinPaperMonitor:
                 return SignalEvent(symbol, close_type, "Altcoin Crash Short Trailing Take Profit", price)
             return None
         max_hold_seconds = self.max_hold_seconds_for_timeframe(timeframe)
+        extended_hold_seconds = self.extended_hold_seconds_for_timeframe(timeframe)
         held_seconds = self.position_age_seconds(pos.open_time)
         if max_hold_seconds > 0 and held_seconds is not None and held_seconds >= max_hold_seconds:
             if change < self.min_profit_to_extend:
@@ -317,6 +322,9 @@ class AltcoinPaperMonitor:
             if peak - change >= self.trailing_after_max_hold_pct:
                 self.max_hold_profit_peaks.pop(symbol, None)
                 return SignalEvent(symbol, close_type, "Altcoin Max Hold Trailing Take Profit", price)
+            if extended_hold_seconds > 0 and held_seconds >= max_hold_seconds + extended_hold_seconds:
+                self.max_hold_profit_peaks.pop(symbol, None)
+                return SignalEvent(symbol, close_type, "Altcoin Extended Max Hold Time", price)
             return None
         if change >= self.take_profit_pct:
             self.short_trailing_peaks.pop(symbol, None)
@@ -329,6 +337,13 @@ class AltcoinPaperMonitor:
             return self.max_hold_bars_15m * 15 * 60
         if timeframe == "30m":
             return self.max_hold_bars_30m * 30 * 60
+        return 0
+
+    def extended_hold_seconds_for_timeframe(self, timeframe: str) -> int:
+        if timeframe == "15m":
+            return self.extended_hold_bars_15m * 15 * 60
+        if timeframe == "30m":
+            return self.extended_hold_bars_30m * 30 * 60
         return 0
 
     @staticmethod
@@ -554,6 +569,8 @@ class AltcoinPaperMonitor:
             "crash_short_trailing_pct": self.crash_short_trailing_pct,
             "max_hold_bars_15m": self.max_hold_bars_15m,
             "max_hold_bars_30m": self.max_hold_bars_30m,
+            "extended_hold_bars_15m": self.extended_hold_bars_15m,
+            "extended_hold_bars_30m": self.extended_hold_bars_30m,
             "min_profit_to_extend": self.min_profit_to_extend,
             "trailing_after_max_hold_pct": self.trailing_after_max_hold_pct,
             "short_trailing_peaks": self.short_trailing_peaks,
@@ -619,6 +636,8 @@ def main() -> None:
     parser.add_argument("--max-order-failures", type=int, default=3, help="pause a symbol after this many consecutive order failures")
     parser.add_argument("--max-hold-bars-15m", type=int, default=8, help="max holding bars for 15m strategies")
     parser.add_argument("--max-hold-bars-30m", type=int, default=6, help="max holding bars for 30m strategies")
+    parser.add_argument("--extended-hold-bars-15m", type=int, default=4, help="extra bars after profitable max-hold extension for 15m strategies")
+    parser.add_argument("--extended-hold-bars-30m", type=int, default=3, help="extra bars after profitable max-hold extension for 30m strategies")
     parser.add_argument("--min-profit-to-extend", type=float, default=0.03, help="profit required to switch max-hold exit to trailing")
     parser.add_argument("--trailing-after-max-hold-pct", type=float, default=0.03, help="trailing pullback after max-hold extension")
     parser.add_argument("--execution-mode", choices=["paper", "testnet"], default="paper", help="paper or Binance testnet execution")
@@ -642,6 +661,8 @@ def main() -> None:
         max_order_failures=args.max_order_failures,
         max_hold_bars_15m=args.max_hold_bars_15m,
         max_hold_bars_30m=args.max_hold_bars_30m,
+        extended_hold_bars_15m=args.extended_hold_bars_15m,
+        extended_hold_bars_30m=args.extended_hold_bars_30m,
         min_profit_to_extend=args.min_profit_to_extend,
         trailing_after_max_hold_pct=args.trailing_after_max_hold_pct,
         execution_mode=args.execution_mode,

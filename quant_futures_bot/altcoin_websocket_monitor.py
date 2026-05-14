@@ -43,6 +43,8 @@ class AltcoinWebSocketMonitor:
             max_order_failures=3,
             max_hold_bars_15m=8,
             max_hold_bars_30m=6,
+            extended_hold_bars_15m=4,
+            extended_hold_bars_30m=3,
             min_profit_to_extend=0.03,
             trailing_after_max_hold_pct=0.03,
         )

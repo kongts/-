@@ -99,6 +99,7 @@ def run_backtest(
     max_hold_bars: int,
     min_profit_to_extend: float,
     trailing_after_max_hold_pct: float,
+    extended_hold_bars: int,
 ) -> BacktestResult:
     symbol_configs = {
         symbol: {
@@ -118,6 +119,7 @@ def run_backtest(
         max_hold_bars=max_hold_bars,
         min_profit_to_extend=min_profit_to_extend,
         trailing_after_max_hold_pct=trailing_after_max_hold_pct,
+        extended_hold_bars=extended_hold_bars,
     ).run()
 
 
@@ -142,6 +144,8 @@ def backtest_top_volume(
     take_profit_pct: float,
     max_hold_bars_15m: int,
     max_hold_bars_30m: int,
+    extended_hold_bars_15m: int,
+    extended_hold_bars_30m: int,
     min_profit_to_extend: float,
     trailing_after_max_hold_pct: float,
 ) -> list[AltcoinBacktestScore]:
@@ -156,6 +160,7 @@ def backtest_top_volume(
             frame = add_indicators(provider.fetch_ohlcv(symbol, timeframe=timeframe, limit=candle_limit))
             data_source = provider.last_source_by_symbol.get(symbol, "exchange")
             max_hold_bars = max_hold_bars_for_timeframe(timeframe, max_hold_bars_15m, max_hold_bars_30m)
+            extended_hold_bars = max_hold_bars_for_timeframe(timeframe, extended_hold_bars_15m, extended_hold_bars_30m)
             for strategy_id in strategies:
                 result = run_backtest(
                     symbol,
@@ -169,6 +174,7 @@ def backtest_top_volume(
                     max_hold_bars,
                     min_profit_to_extend,
                     trailing_after_max_hold_pct,
+                    extended_hold_bars,
                 )
                 scores.append(
                     AltcoinBacktestScore(
@@ -251,6 +257,8 @@ def main() -> None:
     parser.add_argument("--take-profit-pct", type=float, default=0.06, help="take profit percentage, e.g. 0.06 = 6%%")
     parser.add_argument("--max-hold-bars-15m", type=int, default=8, help="max holding bars for 15m strategies")
     parser.add_argument("--max-hold-bars-30m", type=int, default=6, help="max holding bars for 30m strategies")
+    parser.add_argument("--extended-hold-bars-15m", type=int, default=4, help="extra bars after profitable max-hold extension for 15m strategies")
+    parser.add_argument("--extended-hold-bars-30m", type=int, default=3, help="extra bars after profitable max-hold extension for 30m strategies")
     parser.add_argument("--min-profit-to-extend", type=float, default=0.03, help="profit required to switch max-hold exit to trailing")
     parser.add_argument("--trailing-after-max-hold-pct", type=float, default=0.03, help="trailing pullback after max-hold extension")
     parser.add_argument("--show", type=int, default=30, help="number of rows to print")
@@ -271,6 +279,8 @@ def main() -> None:
         take_profit_pct=args.take_profit_pct,
         max_hold_bars_15m=args.max_hold_bars_15m,
         max_hold_bars_30m=args.max_hold_bars_30m,
+        extended_hold_bars_15m=args.extended_hold_bars_15m,
+        extended_hold_bars_30m=args.extended_hold_bars_30m,
         min_profit_to_extend=args.min_profit_to_extend,
         trailing_after_max_hold_pct=args.trailing_after_max_hold_pct,
     )
