@@ -8,6 +8,7 @@ import pandas as pd
 
 from .data import MarketDataProvider
 from .events import OrderStatus, SignalEvent, SignalType
+from . import config
 from .execution import PaperExecution
 from .indicators import add_indicators
 from .market_state import detect_market_state
@@ -34,6 +35,7 @@ class BacktestResult:
     profit_factor: float
     max_consecutive_losses: int
     pause_count: int
+    funding_cost: float
     data_sources: dict[str, str]
     equity_curve: list[float]
 
@@ -52,6 +54,9 @@ class Backtester:
         min_profit_to_extend: float = 0.03,
         trailing_after_max_hold_pct: float = 0.03,
         extended_hold_bars: int = 0,
+        fee_rate: float = config.FEE_RATE,
+        slippage_rate: float = config.SLIPPAGE_RATE,
+        funding_cost_rate_per_8h: float = config.FUNDING_COST_RATE_PER_8H,
     ) -> None:
         self.data_provider = MarketDataProvider(use_exchange=not offline, fallback_to_synthetic=offline)
         self.strategy_manager = StrategyManager(strategy_id=strategy_id, use_saved_selection=strategy_id is None)
@@ -64,8 +69,9 @@ class Backtester:
         self.min_profit_to_extend = min_profit_to_extend
         self.trailing_after_max_hold_pct = trailing_after_max_hold_pct
         self.extended_hold_bars = extended_hold_bars
+        self.funding_cost_rate_per_8h = funding_cost_rate_per_8h
         self.order_manager = OrderManager()
-        self.execution = PaperExecution()
+        self.execution = PaperExecution(fee_rate=fee_rate, slippage_rate=slippage_rate)
         self.portfolio = Portfolio()
         self.pause_manager = PauseManager()
         self.risk_engine = RiskEngine(self.portfolio, self.pause_manager, symbol_configs=self.symbol_configs)
@@ -75,6 +81,7 @@ class Backtester:
         self.max_hold_profit_peaks: dict[str, float] = {}
         self.current_idx = 0
         self.pause_count = 0
+        self.funding_cost = 0.0
         self.equity_curve: list[float] = []
 
     def run(self) -> BacktestResult:
@@ -87,6 +94,7 @@ class Backtester:
                 window = df.iloc[: idx + 1].copy()
                 price = float(window.iloc[-1]["close"])
                 self.portfolio.update_market_price(symbol, price)
+                self._apply_funding_cost(symbol, price, window, idx)
                 latest_rows[symbol] = window.iloc[-1].to_dict()
                 exit_signal = self._stop_or_take_profit_signal(symbol, price, idx)
                 if exit_signal is not None:
@@ -171,6 +179,28 @@ class Backtester:
             return SignalEvent(symbol, close_type, "Take Profit", price)
         return None
 
+    def _apply_funding_cost(self, symbol: str, price: float, window: pd.DataFrame, idx: int) -> None:
+        if self.funding_cost_rate_per_8h <= 0 or idx <= 0:
+            return
+        pos = self.portfolio.get_position(symbol)
+        if not pos.is_open() or pos.qty <= 0:
+            return
+        elapsed_hours = self._elapsed_hours(window, idx)
+        if elapsed_hours <= 0:
+            return
+        cost = price * pos.qty * self.funding_cost_rate_per_8h * elapsed_hours / 8.0
+        self.funding_cost += cost
+        self.portfolio.apply_cost(cost)
+
+    @staticmethod
+    def _elapsed_hours(window: pd.DataFrame, idx: int) -> float:
+        if "timestamp" not in window.columns:
+            return 1.0
+        current = pd.Timestamp(window.iloc[-1]["timestamp"])
+        previous = pd.Timestamp(window.iloc[-2]["timestamp"])
+        delta_hours = (current - previous).total_seconds() / 3600
+        return max(delta_hours, 0.0)
+
     def _result(self) -> BacktestResult:
         pnls = self.trade_pnls
         wins = [pnl for pnl in pnls if pnl > 0]
@@ -194,6 +224,7 @@ class Backtester:
             profit_factor=profit_factor,
             max_consecutive_losses=self._max_consecutive_losses(pnls),
             pause_count=self.pause_count,
+            funding_cost=self.funding_cost,
             data_sources=self.data_sources or dict(self.data_provider.last_source_by_symbol),
             equity_curve=self.equity_curve,
         )
@@ -234,6 +265,7 @@ def main() -> None:
     print(f"profit_factor={result.profit_factor:.2f}")
     print(f"max_consecutive_losses={result.max_consecutive_losses}")
     print(f"pause_count={result.pause_count}")
+    print(f"funding_cost={result.funding_cost:.4f}")
     print("data_source=" + ",".join(f"{symbol}={source}" for symbol, source in sorted(result.data_sources.items())))
 
 

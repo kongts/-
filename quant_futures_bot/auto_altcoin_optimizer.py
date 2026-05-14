@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .altcoin_top_volume_backtest import backtest_top_volume, print_summary, write_csv
-from .config import DATA_DIR, LOG_DIR
+from .config import DATA_DIR, FUNDING_COST_RATE_PER_8H, LOG_DIR, MAKER_FEE_RATE
 
 
 def run_once(args: argparse.Namespace) -> None:
@@ -21,7 +21,8 @@ def run_once(args: argparse.Namespace) -> None:
         f"max_margin_ratio={args.max_margin_ratio:.2%} leverage={args.leverage}x "
         f"max_hold_15m={args.max_hold_bars_15m} max_hold_30m={args.max_hold_bars_30m} "
         f"extended_hold_15m={args.extended_hold_bars_15m} extended_hold_30m={args.extended_hold_bars_30m} "
-        f"min_profit_to_extend={args.min_profit_to_extend:.2%} trailing_after_max_hold={args.trailing_after_max_hold_pct:.2%}"
+        f"min_profit_to_extend={args.min_profit_to_extend:.2%} trailing_after_max_hold={args.trailing_after_max_hold_pct:.2%} "
+        f"fee_rate={args.fee_rate:.4%} funding_cost_per_8h={args.funding_cost_rate_per_8h:.4%}"
     )
     rows = backtest_top_volume(
         top=args.top,
@@ -39,10 +40,12 @@ def run_once(args: argparse.Namespace) -> None:
         extended_hold_bars_30m=args.extended_hold_bars_30m,
         min_profit_to_extend=args.min_profit_to_extend,
         trailing_after_max_hold_pct=args.trailing_after_max_hold_pct,
+        fee_rate=args.fee_rate,
+        funding_cost_rate_per_8h=args.funding_cost_rate_per_8h,
     )
     if rows:
         write_csv(Path(args.output), rows)
-        write_latest_json(rows, Path(args.latest_json), args.min_score, args.max_leaders)
+        write_latest_json(rows, Path(args.latest_json), args.min_score, args.max_leaders, args.fee_rate, args.funding_cost_rate_per_8h)
         print_summary(rows, args.show)
         selected = select_latest_leaders(rows, args.min_score, args.max_leaders)
         for item in selected[: args.show]:
@@ -50,7 +53,8 @@ def run_once(args: argparse.Namespace) -> None:
                 f"rank={item.rank} volume_rank={item.volume_rank} symbol={item.symbol} "
                 f"strategy={item.strategy_id}/{item.timeframe} return={item.return_pct:.2f}% "
                 f"dd={item.max_drawdown:.2%} sharpe={item.sharpe:.2f} trades={item.trade_count} "
-                f"win={item.win_rate:.0%} pf={item.profit_factor:.2f} score={item.score:.2f}"
+                f"win={item.win_rate:.0%} pf={item.profit_factor:.2f} funding={item.funding_cost:.2f} "
+                f"score={item.score:.2f}"
             )
         positive = [item for item in rows if item.return_pct > 0 and item.trade_count > 0]
         log(
@@ -77,7 +81,7 @@ def select_latest_leaders(rows, min_score: float, max_leaders: int) -> list:
     return selected
 
 
-def write_latest_json(rows, path: Path, min_score: float, max_leaders: int) -> None:
+def write_latest_json(rows, path: Path, min_score: float, max_leaders: int, fee_rate: float, funding_cost_rate_per_8h: float) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     leaders = select_latest_leaders(rows, min_score, max_leaders)
     payload = {
@@ -85,6 +89,8 @@ def write_latest_json(rows, path: Path, min_score: float, max_leaders: int) -> N
         "selection_mode": "score_threshold",
         "min_score": min_score,
         "max_leaders": max_leaders,
+        "fee_rate": fee_rate,
+        "funding_cost_rate_per_8h": funding_cost_rate_per_8h,
         "tested_count": len(rows),
         "leader_count": len(leaders),
         "leaders": [
@@ -101,6 +107,7 @@ def write_latest_json(rows, path: Path, min_score: float, max_leaders: int) -> N
                 "trade_count": item.trade_count,
                 "win_rate": item.win_rate,
                 "profit_factor": finite_or_inf(item.profit_factor),
+                "funding_cost": item.funding_cost,
                 "score": item.score,
             }
             for item in leaders
@@ -138,6 +145,13 @@ def main() -> None:
     parser.add_argument("--extended-hold-bars-30m", type=int, default=3, help="extra bars after profitable max-hold extension for 30m strategies")
     parser.add_argument("--min-profit-to-extend", type=float, default=0.03, help="profit required to switch max-hold exit to trailing")
     parser.add_argument("--trailing-after-max-hold-pct", type=float, default=0.03, help="trailing pullback after max-hold extension")
+    parser.add_argument("--fee-rate", type=float, default=MAKER_FEE_RATE, help="estimated fill fee rate for backtest")
+    parser.add_argument(
+        "--funding-cost-rate-per-8h",
+        type=float,
+        default=FUNDING_COST_RATE_PER_8H,
+        help="conservative estimated funding cost per 8h, charged on open notional",
+    )
     parser.add_argument("--show", type=int, default=30, help="number of rows to print")
     parser.add_argument("--min-score", type=float, default=1.0, help="write all rows with score >= this value to latest-json")
     parser.add_argument("--max-leaders", type=int, default=0, help="cap latest-json leaders; 0 means no cap")

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .account_sync import BinanceAccountSync
-from .config import DATA_DIR, FEE_RATE, LOG_DIR
+from .config import DATA_DIR, FUNDING_COST_RATE_PER_8H, MAKER_FEE_RATE, LOG_DIR
 from .data import MarketDataProvider
 from .events import OrderStatus, SignalEvent, SignalType
 from .execution import BinanceTestnetExecution, PaperExecution
@@ -575,7 +575,8 @@ class AltcoinPaperMonitor:
             "trailing_after_max_hold_pct": self.trailing_after_max_hold_pct,
             "short_trailing_peaks": self.short_trailing_peaks,
             "max_hold_profit_peaks": self.max_hold_profit_peaks,
-            "fee_rate": FEE_RATE,
+            "fee_rate": MAKER_FEE_RATE if self.order_type == "limit" else self.execution.fee_rate,
+            "funding_cost_rate_per_8h": FUNDING_COST_RATE_PER_8H,
             "positions": self.portfolio.to_dict()["positions"],
         }
         self.latest_path.parent.mkdir(parents=True, exist_ok=True)

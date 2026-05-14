@@ -434,11 +434,13 @@ python -m quant_futures_bot.strategy_optimizer
 山寨币交易量前 100 回测：
 
 ```bash
-python -m quant_futures_bot.altcoin_top_volume_backtest --top 100 --limit 500 --timeframes 15m,30m --show 30
+python -m quant_futures_bot.altcoin_top_volume_backtest --top 100 --limit 500 --timeframes 15m,30m --show 30 --fee-rate 0.0002 --funding-cost-rate-per-8h 0.0001
 ```
 
 山寨币滚动优化：
 
 ```bash
-python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 100 --limit 500 --timeframes 15m,30m --show 30 --min-score 1.0 --max-leaders 0
+python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 100 --limit 500 --timeframes 15m,30m --show 30 --min-score 1.0 --max-leaders 0 --fee-rate 0.0002 --funding-cost-rate-per-8h 0.0001
 ```
+
+山寨币回测默认按挂单 maker 手续费 `0.02%` 估算，并按每 8 小时 `0.01%` 的保守资金费成本扣减持仓名义价值。输出里的 `funding` 表示本次回测扣掉的资金费估算值。

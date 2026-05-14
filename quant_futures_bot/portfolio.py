@@ -67,12 +67,18 @@ class Portfolio:
             self._open_position(pos, "SHORT", fill.fill_price, fill.qty, notional / leverage, fill.timestamp)
         elif action in {SignalType.CLOSE_LONG, SignalType.CLOSE_SHORT, SignalType.CLOSE_POSITION}:
             pnl = self._close_position(pos, fill.fill_price, fill.qty)
-        self.cash -= fill.fee
         self.realized_pnl += pnl - fill.fee
         self.daily_pnl += pnl - fill.fee
         self._record_closed_trade(pnl - fill.fee, action)
         self.recalculate()
         return pnl - fill.fee
+
+    def apply_cost(self, cost: float) -> None:
+        if cost <= 0:
+            return
+        self.realized_pnl -= cost
+        self.daily_pnl -= cost
+        self.recalculate()
 
     def _open_position(self, pos: Position, side: str, price: float, qty: float, margin: float, timestamp: datetime) -> None:
         pos.position_side = side

@@ -8,6 +8,7 @@ from statistics import mean
 
 import pandas as pd
 
+from . import config
 from .backtest import Backtester, BacktestResult
 from .data import MarketDataProvider
 from .indicators import add_indicators
@@ -53,6 +54,7 @@ class AltcoinBacktestScore:
     trade_count: int
     win_rate: float
     profit_factor: float
+    funding_cost: float
     score: float
 
 
@@ -100,6 +102,8 @@ def run_backtest(
     min_profit_to_extend: float,
     trailing_after_max_hold_pct: float,
     extended_hold_bars: int,
+    fee_rate: float,
+    funding_cost_rate_per_8h: float,
 ) -> BacktestResult:
     symbol_configs = {
         symbol: {
@@ -120,6 +124,8 @@ def run_backtest(
         min_profit_to_extend=min_profit_to_extend,
         trailing_after_max_hold_pct=trailing_after_max_hold_pct,
         extended_hold_bars=extended_hold_bars,
+        fee_rate=fee_rate,
+        funding_cost_rate_per_8h=funding_cost_rate_per_8h,
     ).run()
 
 
@@ -148,6 +154,8 @@ def backtest_top_volume(
     extended_hold_bars_30m: int,
     min_profit_to_extend: float,
     trailing_after_max_hold_pct: float,
+    fee_rate: float,
+    funding_cost_rate_per_8h: float,
 ) -> list[AltcoinBacktestScore]:
     provider = MarketDataProvider(use_exchange=True, fallback_to_synthetic=False)
     top_symbols = fetch_top_usdt_perpetuals(top, include_majors=include_majors)
@@ -175,6 +183,8 @@ def backtest_top_volume(
                     min_profit_to_extend,
                     trailing_after_max_hold_pct,
                     extended_hold_bars,
+                    fee_rate,
+                    funding_cost_rate_per_8h,
                 )
                 scores.append(
                     AltcoinBacktestScore(
@@ -191,6 +201,7 @@ def backtest_top_volume(
                         trade_count=result.trade_count,
                         win_rate=result.win_rate,
                         profit_factor=result.profit_factor,
+                        funding_cost=result.funding_cost,
                         score=score_result(result),
                     )
                 )
@@ -216,7 +227,8 @@ def print_summary(rows: list[AltcoinBacktestScore], top_n: int) -> None:
             f"{item.rank}. volume_rank={item.volume_rank} {item.symbol} "
             f"{item.strategy_id}/{item.timeframe} return={item.return_pct:.2f}% "
             f"dd={item.max_drawdown:.2%} sharpe={item.sharpe:.2f} trades={item.trade_count} "
-            f"win={item.win_rate:.0%} pf={item.profit_factor:.2f} score={item.score:.2f}"
+            f"win={item.win_rate:.0%} pf={item.profit_factor:.2f} funding={item.funding_cost:.2f} "
+            f"score={item.score:.2f}"
         )
     positive = [item for item in rows if item.return_pct > 0 and item.trade_count > 0]
     print(
@@ -261,6 +273,13 @@ def main() -> None:
     parser.add_argument("--extended-hold-bars-30m", type=int, default=3, help="extra bars after profitable max-hold extension for 30m strategies")
     parser.add_argument("--min-profit-to-extend", type=float, default=0.03, help="profit required to switch max-hold exit to trailing")
     parser.add_argument("--trailing-after-max-hold-pct", type=float, default=0.03, help="trailing pullback after max-hold extension")
+    parser.add_argument("--fee-rate", type=float, default=config.MAKER_FEE_RATE, help="estimated fill fee rate for backtest")
+    parser.add_argument(
+        "--funding-cost-rate-per-8h",
+        type=float,
+        default=config.FUNDING_COST_RATE_PER_8H,
+        help="conservative estimated funding cost per 8h, charged on open notional",
+    )
     parser.add_argument("--show", type=int, default=30, help="number of rows to print")
     parser.add_argument("--output", default="quant_futures_bot/data/altcoin_top_volume_backtest.csv", help="CSV output path")
     args = parser.parse_args()
@@ -283,6 +302,8 @@ def main() -> None:
         extended_hold_bars_30m=args.extended_hold_bars_30m,
         min_profit_to_extend=args.min_profit_to_extend,
         trailing_after_max_hold_pct=args.trailing_after_max_hold_pct,
+        fee_rate=args.fee_rate,
+        funding_cost_rate_per_8h=args.funding_cost_rate_per_8h,
     )
     if rows:
         output = Path(args.output)

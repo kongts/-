@@ -362,6 +362,8 @@ sudo systemctl enable --now quant-altcoin-paper.timer
 /opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.altcoin_paper_monitor --run-once --top 0 --candle-limit 220 --execution-mode testnet --confirm-exchange-orders YES --order-type limit --maker-offset 0.001 --crash-watch-drop-pct 0.03 --crash-watch-breadth-ratio 0.6 --crash-short-trailing-pct 0.03 --open-order-timeout-seconds 180 --close-order-timeout-seconds 60 --max-order-failures 3 --max-hold-bars-15m 8 --max-hold-bars-30m 6 --extended-hold-bars-15m 4 --extended-hold-bars-30m 3 --min-profit-to-extend 0.03 --trailing-after-max-hold-pct 0.03
 ```
 
+山寨币滚动回测会按挂单 maker 手续费 `0.02%` 和每 8 小时 `0.01%` 的保守资金费成本估算，排名日志里的 `funding` 是该策略回测期间扣掉的资金费估算值。
+
 看到下面内容，表示已经向交易所测试盘提交限价挂单：
 
 ```text
