@@ -442,6 +442,12 @@ testnet_order ... type=limit ... status=submitted post_only=YES
 cd /opt/quant-futures-bot && /opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.account_watch
 ```
 
+如果你的代码还没更新到自动读取 `.env`，可以临时这样运行：
+
+```bash
+cd /opt/quant-futures-bot && set -a && source .env && set +a && /opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.account_watch
+```
+
 如需持续刷新：
 
 ```bash

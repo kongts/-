@@ -2,11 +2,29 @@ import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = BASE_DIR.parent
 DATA_DIR = BASE_DIR / "data"
 LOG_DIR = BASE_DIR / "logs"
 DB_PATH = DATA_DIR / "quant_bot.db"
 STATE_PATH = DATA_DIR / "state.json"
 ERROR_LOG_PATH = LOG_DIR / "error.log"
+
+
+def load_dotenv(path: Path) -> None:
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+load_dotenv(PROJECT_DIR / ".env")
 
 INITIAL_CASH = 10_000.0
 TIMEFRAME = "1h"
