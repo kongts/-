@@ -436,6 +436,31 @@ testnet_order ... type=limit ... status=submitted post_only=YES
 
 ## 常用排查
 
+实时查看账户、持仓和浮盈浮亏：
+
+```bash
+cd /opt/quant-futures-bot && /opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.account_watch --interval-seconds 5
+```
+
+只查看一次：
+
+```bash
+cd /opt/quant-futures-bot && /opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.account_watch --once
+```
+
+输出示例：
+
+```text
+[2026-05-14 13:20:00] equity=4964.51 wallet=5000.00 available=4374.11 used_margin=590.40 unrealized=-16.40 positions=2 open_orders=0
+  BTC/USDT:USDT LONG qty=0.01000000 entry=79814.600000 mark=78852.200000 notional=788.52 margin=394.26 pnl=-9.62 pnl_pct=-1.22%
+```
+
+退出实时查看：
+
+```text
+Ctrl + C
+```
+
 查看 CPU：
 
 ```bash
