@@ -6,6 +6,8 @@ env/
 
 quant_futures_bot/data/*.db
 quant_futures_bot/data/*.csv
+quant_futures_bot/data/historical_ohlcv/
+quant_futures_bot/data/tmp_historical_smoke/
 quant_futures_bot/data/altcoin_strategy_latest.json
 quant_futures_bot/data/altcoin_paper_state.json
 quant_futures_bot/data/altcoin_paper_runtime_state.json
@@ -15,6 +17,15 @@ quant_futures_bot/data/altcoin_testnet_runtime_state.json
 quant_futures_bot/data/altcoin_testnet_latest.json
 quant_futures_bot/data/state.json
 quant_futures_bot/data/selected_strategy.json
+quant_futures_bot/data/macro_strategy_latest.json
+quant_futures_bot/data/macro_paper_state.json
+quant_futures_bot/data/macro_paper_runtime_state.json
+quant_futures_bot/data/macro_paper_latest.json
+quant_futures_bot/data/macro_testnet_state.json
+quant_futures_bot/data/macro_testnet_runtime_state.json
+quant_futures_bot/data/macro_testnet_latest.json
+quant_futures_bot/data/macro_rolling_backtest.csv
+quant_futures_bot/data/macro_optimizer.lock
 quant_futures_bot/logs/*.log
 
 .env

@@ -62,6 +62,18 @@ python -m quant_futures_bot.macro_optimizer --run-once --top 50 --limit 1000 --t
 python -m quant_futures_bot.account_watch
 ```
 
+下载 2022-01 到 2026-01 的历史 K 线，供后续本地回测使用：
+
+```bash
+python -m quant_futures_bot.historical_data --start 2022-01-01 --end 2026-01-01 --timeframes 15m,30m,1h,4h,6h --include-main --include-altcoin-latest --include-macro-latest
+```
+
+Windows 可直接运行：
+
+```bat
+download_historical_ohlcv.bat
+```
+
 ## 三板块架构
 
 ### 1. 主流币
@@ -131,6 +143,37 @@ python -m quant_futures_bot.account_watch
 - crash watch 下，空单不再按固定止盈过早平仓，而是启用追踪止盈
 - 空单继续盈利时继续持有，从最大浮盈回撤超过 `3%` 才挂单平空
 - 止损仍然保留
+
+## 本地历史数据
+
+历史 K 线单独存放在：
+
+```bash
+quant_futures_bot/data/historical_ohlcv/binance_usdt_futures/
+```
+
+目录结构：
+
+```text
+historical_ohlcv/
+  binance_usdt_futures/
+    manifest.json
+    15m/BTC_USDT_USDT.csv.gz
+    30m/BTC_USDT_USDT.csv.gz
+    1h/BTC_USDT_USDT.csv.gz
+    4h/BTC_USDT_USDT.csv.gz
+    6h/BTC_USDT_USDT.csv.gz
+```
+
+说明：
+
+- 默认时间范围是 `2022-01-01` 到 `2026-01-01`，结束日期不包含当天。
+- 文件格式是 `csv.gz`，字段为 `timestamp,open,high,low,close,volume,data_source`。
+- 默认包含 BTC/ETH/SOL。
+- 加 `--include-altcoin-latest` 会读取 `altcoin_strategy_latest.json` 里的山寨币标的。
+- 加 `--include-macro-latest` 会读取 `macro_strategy_latest.json` 里的宏观映射标的。
+- 支持断点续传，重复运行会从已有文件最后一根 K 线后继续拉取。
+- 如果某个合约 2022 年还没上市，文件会从交易所可提供的第一根 K 线开始。
 
 ## 服务器服务
 
