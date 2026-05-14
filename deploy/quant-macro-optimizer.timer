@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Macro Mapped-Market Rolling Backtest Every 4 Hours
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=4h
+Unit=quant-macro-optimizer.service
+
+[Install]
+WantedBy=timers.target
+

@@ -32,6 +32,9 @@ class AltcoinPaperMonitor:
         strategy_path: Path = DEFAULT_STRATEGY_PATH,
         state_path: Path = DEFAULT_STATE_PATH,
         latest_path: Path = DEFAULT_LATEST_PATH,
+        runtime_state_path: Path | None = None,
+        board_name: str = "altcoin",
+        log_filename: str | None = None,
         top: int = 5,
         candle_limit: int = 220,
         max_margin_ratio: float = 0.03,
@@ -46,8 +49,12 @@ class AltcoinPaperMonitor:
         max_order_failures: int = 3,
         max_hold_bars_15m: int = 8,
         max_hold_bars_30m: int = 6,
+        max_hold_bars_1h: int = 24,
+        max_hold_bars_4h: int = 18,
         extended_hold_bars_15m: int = 4,
         extended_hold_bars_30m: int = 3,
+        extended_hold_bars_1h: int = 12,
+        extended_hold_bars_4h: int = 6,
         min_profit_to_extend: float = 0.03,
         trailing_after_max_hold_pct: float = 0.03,
         execution_mode: str = "paper",
@@ -64,15 +71,20 @@ class AltcoinPaperMonitor:
         if execution_mode == "testnet" and order_type != "limit":
             raise RuntimeError("altcoin testnet exchange orders are limit-only; use --order-type limit")
         if execution_mode == "testnet":
-            state_path = DATA_DIR / "altcoin_testnet_state.json"
-            latest_path = DATA_DIR / "altcoin_testnet_latest.json"
-            runtime_state_path = DATA_DIR / "altcoin_testnet_runtime_state.json"
+            if state_path == DEFAULT_STATE_PATH:
+                state_path = DATA_DIR / "altcoin_testnet_state.json"
+            if latest_path == DEFAULT_LATEST_PATH:
+                latest_path = DATA_DIR / "altcoin_testnet_latest.json"
+            if runtime_state_path is None:
+                runtime_state_path = DATA_DIR / "altcoin_testnet_runtime_state.json"
         else:
-            runtime_state_path = DEFAULT_RUNTIME_STATE_PATH
+            runtime_state_path = runtime_state_path or DEFAULT_RUNTIME_STATE_PATH
         self.strategy_path = strategy_path
         self.state_path = state_path
         self.latest_path = latest_path
         self.runtime_state_path = runtime_state_path
+        self.board_name = board_name
+        self.log_filename = log_filename or ("altcoin_testnet.log" if execution_mode == "testnet" else "altcoin_paper.log")
         self.execution_mode = execution_mode
         self.order_type = order_type
         self.maker_offset = maker_offset
@@ -90,8 +102,12 @@ class AltcoinPaperMonitor:
         self.max_order_failures = max_order_failures
         self.max_hold_bars_15m = max_hold_bars_15m
         self.max_hold_bars_30m = max_hold_bars_30m
+        self.max_hold_bars_1h = max_hold_bars_1h
+        self.max_hold_bars_4h = max_hold_bars_4h
         self.extended_hold_bars_15m = extended_hold_bars_15m
         self.extended_hold_bars_30m = extended_hold_bars_30m
+        self.extended_hold_bars_1h = extended_hold_bars_1h
+        self.extended_hold_bars_4h = extended_hold_bars_4h
         self.min_profit_to_extend = min_profit_to_extend
         self.trailing_after_max_hold_pct = trailing_after_max_hold_pct
         self.data_provider = MarketDataProvider(use_exchange=True, fallback_to_synthetic=False)
@@ -115,7 +131,7 @@ class AltcoinPaperMonitor:
         cycle_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         selected_leaders = self.select_leaders(leaders)
         self.log(
-            f"[{cycle_started_at}] start altcoin {self.execution_mode} cycle "
+            f"[{cycle_started_at}] start {self.board_name} {self.execution_mode} cycle "
             f"leaders={len(leaders)} selected={len(selected_leaders)} top={self.top}"
         )
         sync_symbols = sorted({leader["symbol"] for leader in selected_leaders} | set(self.pending_orders))
@@ -300,7 +316,7 @@ class AltcoinPaperMonitor:
         if change <= -self.stop_loss_pct:
             self.short_trailing_peaks.pop(symbol, None)
             self.max_hold_profit_peaks.pop(symbol, None)
-            return SignalEvent(symbol, close_type, "Altcoin Paper Stop Loss", price)
+            return SignalEvent(symbol, close_type, f"{self.board_name.title()} Stop Loss", price)
         if pos.position_side == "SHORT" and crash_watch:
             peak = max(self.short_trailing_peaks.get(symbol, change), change)
             self.short_trailing_peaks[symbol] = peak
@@ -308,7 +324,7 @@ class AltcoinPaperMonitor:
             if peak >= self.take_profit_pct and pullback >= self.crash_short_trailing_pct:
                 self.short_trailing_peaks.pop(symbol, None)
                 self.max_hold_profit_peaks.pop(symbol, None)
-                return SignalEvent(symbol, close_type, "Altcoin Crash Short Trailing Take Profit", price)
+                return SignalEvent(symbol, close_type, f"{self.board_name.title()} Crash Short Trailing Take Profit", price)
             return None
         max_hold_seconds = self.max_hold_seconds_for_timeframe(timeframe)
         extended_hold_seconds = self.extended_hold_seconds_for_timeframe(timeframe)
@@ -316,20 +332,20 @@ class AltcoinPaperMonitor:
         if max_hold_seconds > 0 and held_seconds is not None and held_seconds >= max_hold_seconds:
             if change < self.min_profit_to_extend:
                 self.max_hold_profit_peaks.pop(symbol, None)
-                return SignalEvent(symbol, close_type, "Altcoin Max Hold Time", price)
+                return SignalEvent(symbol, close_type, f"{self.board_name.title()} Max Hold Time", price)
             peak = max(self.max_hold_profit_peaks.get(symbol, change), change)
             self.max_hold_profit_peaks[symbol] = peak
             if peak - change >= self.trailing_after_max_hold_pct:
                 self.max_hold_profit_peaks.pop(symbol, None)
-                return SignalEvent(symbol, close_type, "Altcoin Max Hold Trailing Take Profit", price)
+                return SignalEvent(symbol, close_type, f"{self.board_name.title()} Max Hold Trailing Take Profit", price)
             if extended_hold_seconds > 0 and held_seconds >= max_hold_seconds + extended_hold_seconds:
                 self.max_hold_profit_peaks.pop(symbol, None)
-                return SignalEvent(symbol, close_type, "Altcoin Extended Max Hold Time", price)
+                return SignalEvent(symbol, close_type, f"{self.board_name.title()} Extended Max Hold Time", price)
             return None
         if change >= self.take_profit_pct:
             self.short_trailing_peaks.pop(symbol, None)
             self.max_hold_profit_peaks.pop(symbol, None)
-            return SignalEvent(symbol, close_type, "Altcoin Paper Take Profit", price)
+            return SignalEvent(symbol, close_type, f"{self.board_name.title()} Take Profit", price)
         return None
 
     def max_hold_seconds_for_timeframe(self, timeframe: str) -> int:
@@ -337,6 +353,10 @@ class AltcoinPaperMonitor:
             return self.max_hold_bars_15m * 15 * 60
         if timeframe == "30m":
             return self.max_hold_bars_30m * 30 * 60
+        if timeframe == "1h":
+            return self.max_hold_bars_1h * 60 * 60
+        if timeframe == "4h":
+            return self.max_hold_bars_4h * 4 * 60 * 60
         return 0
 
     def extended_hold_seconds_for_timeframe(self, timeframe: str) -> int:
@@ -344,6 +364,10 @@ class AltcoinPaperMonitor:
             return self.extended_hold_bars_15m * 15 * 60
         if timeframe == "30m":
             return self.extended_hold_bars_30m * 30 * 60
+        if timeframe == "1h":
+            return self.extended_hold_bars_1h * 60 * 60
+        if timeframe == "4h":
+            return self.extended_hold_bars_4h * 4 * 60 * 60
         return 0
 
     @staticmethod
@@ -469,7 +493,7 @@ class AltcoinPaperMonitor:
 
     def load_leaders(self) -> list[dict]:
         if not self.strategy_path.exists():
-            self.log(f"missing_altcoin_strategy_latest path={self.strategy_path}")
+            self.log(f"missing_{self.board_name}_strategy_latest path={self.strategy_path}")
             return []
         payload = json.loads(self.strategy_path.read_text(encoding="utf-8"))
         return list(payload.get("leaders", []))
@@ -569,8 +593,12 @@ class AltcoinPaperMonitor:
             "crash_short_trailing_pct": self.crash_short_trailing_pct,
             "max_hold_bars_15m": self.max_hold_bars_15m,
             "max_hold_bars_30m": self.max_hold_bars_30m,
+            "max_hold_bars_1h": self.max_hold_bars_1h,
+            "max_hold_bars_4h": self.max_hold_bars_4h,
             "extended_hold_bars_15m": self.extended_hold_bars_15m,
             "extended_hold_bars_30m": self.extended_hold_bars_30m,
+            "extended_hold_bars_1h": self.extended_hold_bars_1h,
+            "extended_hold_bars_4h": self.extended_hold_bars_4h,
             "min_profit_to_extend": self.min_profit_to_extend,
             "trailing_after_max_hold_pct": self.trailing_after_max_hold_pct,
             "short_trailing_peaks": self.short_trailing_peaks,
@@ -614,8 +642,7 @@ class AltcoinPaperMonitor:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         line = message if message.startswith("[") else f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}"
         print(line, flush=True)
-        log_name = "altcoin_testnet.log" if getattr(self, "execution_mode", "paper") == "testnet" else "altcoin_paper.log"
-        with (LOG_DIR / log_name).open("a", encoding="utf-8") as fh:
+        with (LOG_DIR / self.log_filename).open("a", encoding="utf-8") as fh:
             fh.write(line + "\n")
 
 
@@ -637,8 +664,12 @@ def main() -> None:
     parser.add_argument("--max-order-failures", type=int, default=3, help="pause a symbol after this many consecutive order failures")
     parser.add_argument("--max-hold-bars-15m", type=int, default=8, help="max holding bars for 15m strategies")
     parser.add_argument("--max-hold-bars-30m", type=int, default=6, help="max holding bars for 30m strategies")
+    parser.add_argument("--max-hold-bars-1h", type=int, default=24, help="max holding bars for 1h strategies")
+    parser.add_argument("--max-hold-bars-4h", type=int, default=18, help="max holding bars for 4h strategies")
     parser.add_argument("--extended-hold-bars-15m", type=int, default=4, help="extra bars after profitable max-hold extension for 15m strategies")
     parser.add_argument("--extended-hold-bars-30m", type=int, default=3, help="extra bars after profitable max-hold extension for 30m strategies")
+    parser.add_argument("--extended-hold-bars-1h", type=int, default=12, help="extra bars after profitable max-hold extension for 1h strategies")
+    parser.add_argument("--extended-hold-bars-4h", type=int, default=6, help="extra bars after profitable max-hold extension for 4h strategies")
     parser.add_argument("--min-profit-to-extend", type=float, default=0.03, help="profit required to switch max-hold exit to trailing")
     parser.add_argument("--trailing-after-max-hold-pct", type=float, default=0.03, help="trailing pullback after max-hold extension")
     parser.add_argument("--execution-mode", choices=["paper", "testnet"], default="paper", help="paper or Binance testnet execution")
@@ -662,8 +693,12 @@ def main() -> None:
         max_order_failures=args.max_order_failures,
         max_hold_bars_15m=args.max_hold_bars_15m,
         max_hold_bars_30m=args.max_hold_bars_30m,
+        max_hold_bars_1h=args.max_hold_bars_1h,
+        max_hold_bars_4h=args.max_hold_bars_4h,
         extended_hold_bars_15m=args.extended_hold_bars_15m,
         extended_hold_bars_30m=args.extended_hold_bars_30m,
+        extended_hold_bars_1h=args.extended_hold_bars_1h,
+        extended_hold_bars_4h=args.extended_hold_bars_4h,
         min_profit_to_extend=args.min_profit_to_extend,
         trailing_after_max_hold_pct=args.trailing_after_max_hold_pct,
         execution_mode=args.execution_mode,

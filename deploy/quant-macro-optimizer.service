@@ -1,0 +1,12 @@
+[Unit]
+Description=Quant Futures Macro Mapped-Market Rolling Backtest
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/quant-futures-bot
+EnvironmentFile=/opt/quant-futures-bot/.env
+ExecStart=/opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.macro_optimizer --run-once --top 50 --limit 1000 --timeframes 1h,4h --show 30 --min-score 1.0 --max-leaders 0 --min-trades 6 --min-side-ratio 0.10 --fold-count 4 --min-profitable-fold-ratio 0.75 --max-hold-bars-1h 24 --max-hold-bars-4h 18 --extended-hold-bars-1h 12 --extended-hold-bars-4h 6 --min-profit-to-extend 0.025 --trailing-after-max-hold-pct 0.025 --fee-rate 0.0002 --funding-cost-rate-per-8h 0.0001 --fetch-timeout-ms 15000 --fetch-retries 1 --output quant_futures_bot/data/macro_rolling_backtest.csv --latest-json quant_futures_bot/data/macro_strategy_latest.json
+TimeoutStartSec=40min
+

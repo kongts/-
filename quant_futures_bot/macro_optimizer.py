@@ -1,0 +1,418 @@
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import math
+import os
+import time
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from pathlib import Path
+from statistics import mean
+
+from .altcoin_top_volume_backtest import (
+    fetch_frame_with_retries,
+    profitable_fold_ratio,
+    run_backtest,
+    side_balance_ratio,
+)
+from .config import DATA_DIR, FUNDING_COST_RATE_PER_8H, LOG_DIR, MAKER_FEE_RATE
+from .data import MarketDataProvider
+from .macro_markets import fetch_supported_macro_markets
+from .strategy_manager import StrategyManager
+
+
+DEFAULT_TIMEFRAMES = ["1h", "4h"]
+DEFAULT_STRATEGIES = ["ma_trend", "breakout_20", "breakout_40", "mean_reversion_20"]
+
+
+@dataclass
+class MacroBacktestScore:
+    rank: int
+    symbol_rank: int
+    symbol: str
+    base: str
+    asset_class: str
+    quote_volume: float
+    strategy_id: str
+    strategy_name: str
+    timeframe: str
+    return_pct: float
+    max_drawdown: float
+    sharpe: float
+    trade_count: int
+    long_trade_count: int
+    short_trade_count: int
+    long_pnl: float
+    short_pnl: float
+    side_balance_ratio: float
+    profitable_fold_ratio: float
+    win_rate: float
+    profit_factor: float
+    funding_cost: float
+    score: float
+
+
+def max_hold_bars_for_timeframe(timeframe: str, max_hold_bars_1h: int, max_hold_bars_4h: int) -> int:
+    if timeframe == "1h":
+        return max_hold_bars_1h
+    if timeframe == "4h":
+        return max_hold_bars_4h
+    return 0
+
+
+def score_result(result, min_trades: int, min_side_ratio: float, min_profitable_fold_ratio: float, fold_count: int) -> float:
+    if result.trade_count == 0:
+        return -999.0
+    side_balance = side_balance_ratio(result)
+    fold_ratio = profitable_fold_ratio(result.equity_curve, fold_count)
+    if result.trade_count < min_trades:
+        return -999.0
+    if side_balance < min_side_ratio:
+        return -999.0
+    if fold_ratio < min_profitable_fold_ratio:
+        return -999.0
+    trade_bonus = min(result.trade_count, 30) * 0.06
+    drawdown_penalty = result.max_drawdown * 100 * 2.2
+    return result.return_pct + result.sharpe * 0.35 + trade_bonus + side_balance * 1.5 + fold_ratio * 2.5 - drawdown_penalty
+
+
+def backtest_macro_markets(
+    top: int,
+    timeframes: list[str],
+    strategies: list[str],
+    candle_limit: int,
+    max_margin_ratio: float,
+    leverage: int,
+    stop_loss_pct: float,
+    take_profit_pct: float,
+    max_hold_bars_1h: int,
+    max_hold_bars_4h: int,
+    extended_hold_bars_1h: int,
+    extended_hold_bars_4h: int,
+    min_profit_to_extend: float,
+    trailing_after_max_hold_pct: float,
+    fee_rate: float,
+    funding_cost_rate_per_8h: float,
+    fetch_timeout_ms: int,
+    fetch_retries: int,
+    min_trades: int,
+    min_side_ratio: float,
+    fold_count: int,
+    min_profitable_fold_ratio: float,
+) -> list[MacroBacktestScore]:
+    provider = MarketDataProvider(use_exchange=True, fallback_to_synthetic=False)
+    if provider.exchange is not None:
+        provider.exchange.timeout = fetch_timeout_ms
+    markets = fetch_supported_macro_markets(top, fetch_timeout_ms=fetch_timeout_ms)
+    rows: list[MacroBacktestScore] = []
+    for idx, market in enumerate(markets, start=1):
+        print(
+            f"fetching_macro {idx}/{len(markets)} {market.symbol} base={market.base} "
+            f"asset_class={market.asset_class} quote_volume={market.quote_volume:.0f}",
+            flush=True,
+        )
+        for timeframe in timeframes:
+            print(f"fetching_ohlcv_macro {idx}/{len(markets)} {market.symbol} timeframe={timeframe} limit={candle_limit}", flush=True)
+            try:
+                frame = fetch_frame_with_retries(provider, market.symbol, timeframe, candle_limit, fetch_retries)
+            except Exception as exc:
+                print(f"macro_symbol_skipped symbol={market.symbol} timeframe={timeframe} reason=fetch_failed error={exc}", flush=True)
+                continue
+            data_source = provider.last_source_by_symbol.get(market.symbol, "exchange")
+            max_hold_bars = max_hold_bars_for_timeframe(timeframe, max_hold_bars_1h, max_hold_bars_4h)
+            extended_hold_bars = max_hold_bars_for_timeframe(timeframe, extended_hold_bars_1h, extended_hold_bars_4h)
+            for strategy_id in strategies:
+                try:
+                    result = run_backtest(
+                        market.symbol,
+                        frame,
+                        strategy_id,
+                        data_source,
+                        max_margin_ratio,
+                        leverage,
+                        stop_loss_pct,
+                        take_profit_pct,
+                        max_hold_bars,
+                        min_profit_to_extend,
+                        trailing_after_max_hold_pct,
+                        extended_hold_bars,
+                        fee_rate,
+                        funding_cost_rate_per_8h,
+                    )
+                except Exception as exc:
+                    print(f"macro_backtest_error symbol={market.symbol} strategy={strategy_id}/{timeframe} error={exc}", flush=True)
+                    continue
+                balance = side_balance_ratio(result)
+                fold_ratio = profitable_fold_ratio(result.equity_curve, fold_count)
+                rows.append(
+                    MacroBacktestScore(
+                        rank=0,
+                        symbol_rank=idx,
+                        symbol=market.symbol,
+                        base=market.base,
+                        asset_class=market.asset_class,
+                        quote_volume=market.quote_volume,
+                        strategy_id=strategy_id,
+                        strategy_name=StrategyManager.available_strategy_names()[strategy_id],
+                        timeframe=timeframe,
+                        return_pct=result.return_pct,
+                        max_drawdown=result.max_drawdown,
+                        sharpe=result.sharpe,
+                        trade_count=result.trade_count,
+                        long_trade_count=result.long_trade_count,
+                        short_trade_count=result.short_trade_count,
+                        long_pnl=result.long_pnl,
+                        short_pnl=result.short_pnl,
+                        side_balance_ratio=balance,
+                        profitable_fold_ratio=fold_ratio,
+                        win_rate=result.win_rate,
+                        profit_factor=result.profit_factor,
+                        funding_cost=result.funding_cost,
+                        score=score_result(result, min_trades, min_side_ratio, min_profitable_fold_ratio, fold_count),
+                    )
+                )
+    rows.sort(key=lambda item: item.score, reverse=True)
+    for rank, item in enumerate(rows, start=1):
+        item.rank = rank
+    return rows
+
+
+def write_csv(path: Path, rows: list[MacroBacktestScore]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(asdict(rows[0]).keys()))
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(asdict(row))
+
+
+def select_latest_leaders(rows: list[MacroBacktestScore], min_score: float, max_leaders: int) -> list[MacroBacktestScore]:
+    selected = [item for item in rows if item.score >= min_score]
+    if max_leaders > 0:
+        return selected[:max_leaders]
+    return selected
+
+
+def finite_or_inf(value: float) -> float | str:
+    return value if math.isfinite(value) else "inf"
+
+
+def write_latest_json(rows: list[MacroBacktestScore], path: Path, args: argparse.Namespace) -> None:
+    leaders = select_latest_leaders(rows, args.min_score, args.max_leaders)
+    payload = {
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "board": "macro",
+        "selection_mode": "score_threshold",
+        "min_score": args.min_score,
+        "max_leaders": args.max_leaders,
+        "min_trades": args.min_trades,
+        "min_side_ratio": args.min_side_ratio,
+        "fold_count": args.fold_count,
+        "min_profitable_fold_ratio": args.min_profitable_fold_ratio,
+        "fee_rate": args.fee_rate,
+        "funding_cost_rate_per_8h": args.funding_cost_rate_per_8h,
+        "tested_count": len(rows),
+        "leader_count": len(leaders),
+        "leaders": [
+            {
+                "rank": item.rank,
+                "symbol_rank": item.symbol_rank,
+                "symbol": item.symbol,
+                "base": item.base,
+                "asset_class": item.asset_class,
+                "strategy_id": item.strategy_id,
+                "strategy_name": item.strategy_name,
+                "timeframe": item.timeframe,
+                "return_pct": item.return_pct,
+                "max_drawdown": item.max_drawdown,
+                "sharpe": item.sharpe,
+                "trade_count": item.trade_count,
+                "long_trade_count": item.long_trade_count,
+                "short_trade_count": item.short_trade_count,
+                "long_pnl": item.long_pnl,
+                "short_pnl": item.short_pnl,
+                "side_balance_ratio": item.side_balance_ratio,
+                "profitable_fold_ratio": item.profitable_fold_ratio,
+                "win_rate": item.win_rate,
+                "profit_factor": finite_or_inf(item.profit_factor),
+                "funding_cost": item.funding_cost,
+                "score": item.score,
+            }
+            for item in leaders
+        ],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
+
+
+def print_summary(rows: list[MacroBacktestScore], top_n: int) -> None:
+    print("macro mapped-market rolling backtest")
+    for item in rows[:top_n]:
+        print(
+            f"{item.rank}. symbol_rank={item.symbol_rank} {item.symbol} {item.asset_class} "
+            f"{item.strategy_id}/{item.timeframe} return={item.return_pct:.2f}% "
+            f"dd={item.max_drawdown:.2%} sharpe={item.sharpe:.2f} trades={item.trade_count} "
+            f"L/S={item.long_trade_count}/{item.short_trade_count} Lpnl={item.long_pnl:.2f} Spnl={item.short_pnl:.2f} "
+            f"side={item.side_balance_ratio:.0%} folds={item.profitable_fold_ratio:.0%} "
+            f"win={item.win_rate:.0%} pf={item.profit_factor:.2f} funding={item.funding_cost:.2f} score={item.score:.2f}"
+        )
+    positive = [item for item in rows if item.return_pct > 0 and item.trade_count > 0]
+    avg_return = mean(item.return_pct for item in rows) if rows else 0.0
+    print(f"tested={len(rows)} positive={len(positive)} avg_return={avg_return:.2f}%")
+
+
+def log(message: str) -> None:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    line = message if message.startswith("[") else f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}"
+    print(line, flush=True)
+    with (LOG_DIR / "macro_strategy.log").open("a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
+
+
+class RunLock:
+    def __init__(self, path: Path, stale_seconds: int) -> None:
+        self.path = path
+        self.stale_seconds = stale_seconds
+        self.fd: int | None = None
+        self.acquired = False
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._remove_stale_lock()
+        try:
+            self.fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(self.fd, f"{os.getpid()} {datetime.now().isoformat(timespec='seconds')}\n".encode("utf-8"))
+            self.acquired = True
+        except FileExistsError:
+            log(f"macro_optimizer_lock_exists path={self.path} action=skip")
+            return False
+        return True
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self.fd is not None:
+            os.close(self.fd)
+        if self.acquired:
+            self.path.unlink(missing_ok=True)
+
+    def _remove_stale_lock(self) -> None:
+        if not self.path.exists():
+            return
+        age = time.time() - self.path.stat().st_mtime
+        if age >= self.stale_seconds:
+            log(f"macro_optimizer_stale_lock_removed path={self.path} age_seconds={age:.0f}")
+            self.path.unlink(missing_ok=True)
+
+
+def run_once(args: argparse.Namespace) -> None:
+    log(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] start macro rolling backtest")
+    log(
+        "macro_config "
+        f"top={args.top} limit={args.limit} timeframes={args.timeframes} strategies={args.strategies} "
+        f"stop_loss={args.stop_loss_pct:.2%} take_profit={args.take_profit_pct:.2%} "
+        f"max_margin_ratio={args.max_margin_ratio:.2%} leverage={args.leverage}x "
+        f"min_trades={args.min_trades} min_side_ratio={args.min_side_ratio:.0%} "
+        f"fold_count={args.fold_count} min_profitable_fold_ratio={args.min_profitable_fold_ratio:.0%}"
+    )
+    rows = backtest_macro_markets(
+        top=args.top,
+        timeframes=[item.strip() for item in args.timeframes.split(",") if item.strip()],
+        strategies=[item.strip() for item in args.strategies.split(",") if item.strip()],
+        candle_limit=args.limit,
+        max_margin_ratio=args.max_margin_ratio,
+        leverage=args.leverage,
+        stop_loss_pct=args.stop_loss_pct,
+        take_profit_pct=args.take_profit_pct,
+        max_hold_bars_1h=args.max_hold_bars_1h,
+        max_hold_bars_4h=args.max_hold_bars_4h,
+        extended_hold_bars_1h=args.extended_hold_bars_1h,
+        extended_hold_bars_4h=args.extended_hold_bars_4h,
+        min_profit_to_extend=args.min_profit_to_extend,
+        trailing_after_max_hold_pct=args.trailing_after_max_hold_pct,
+        fee_rate=args.fee_rate,
+        funding_cost_rate_per_8h=args.funding_cost_rate_per_8h,
+        fetch_timeout_ms=args.fetch_timeout_ms,
+        fetch_retries=args.fetch_retries,
+        min_trades=args.min_trades,
+        min_side_ratio=args.min_side_ratio,
+        fold_count=args.fold_count,
+        min_profitable_fold_ratio=args.min_profitable_fold_ratio,
+    )
+    if not rows:
+        log("no macro rows generated; Binance may not expose mapped macro symbols for this account/region")
+        return
+    write_csv(Path(args.output), rows)
+    write_latest_json(rows, Path(args.latest_json), args)
+    print_summary(rows, args.show)
+    selected = select_latest_leaders(rows, args.min_score, args.max_leaders)
+    for item in selected[: args.show]:
+        log(
+            f"rank={item.rank} symbol={item.symbol} asset_class={item.asset_class} strategy={item.strategy_id}/{item.timeframe} "
+            f"return={item.return_pct:.2f}% dd={item.max_drawdown:.2%} sharpe={item.sharpe:.2f} trades={item.trade_count} "
+            f"L/S={item.long_trade_count}/{item.short_trade_count} Lpnl={item.long_pnl:.2f} Spnl={item.short_pnl:.2f} "
+            f"side={item.side_balance_ratio:.0%} folds={item.profitable_fold_ratio:.0%} score={item.score:.2f}"
+        )
+    log(
+        f"macro_summary tested={len(rows)} selected={len(selected)} min_score={args.min_score:.2f} "
+        f"csv={args.output} latest_json={args.latest_json}"
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run mapped macro-market backtests on Binance USDT perpetuals")
+    parser.add_argument("--interval-minutes", type=float, default=240.0, help="minutes between rolling updates")
+    parser.add_argument("--run-once", action="store_true", help="run once and exit")
+    parser.add_argument("--run-once-first", action="store_true", help="run immediately before waiting")
+    parser.add_argument("--top", type=int, default=50, help="max mapped macro symbols to discover")
+    parser.add_argument("--limit", type=int, default=1000, help="candles per symbol/timeframe")
+    parser.add_argument("--timeframes", default="1h,4h", help="comma-separated timeframes")
+    parser.add_argument("--strategies", default=",".join(DEFAULT_STRATEGIES), help="comma-separated strategy ids")
+    parser.add_argument("--max-margin-ratio", type=float, default=0.03, help="margin ratio per symbol for backtest sizing")
+    parser.add_argument("--leverage", type=int, default=2, help="leverage for backtest sizing")
+    parser.add_argument("--stop-loss-pct", type=float, default=0.02, help="stop loss percentage")
+    parser.add_argument("--take-profit-pct", type=float, default=0.05, help="take profit percentage")
+    parser.add_argument("--max-hold-bars-1h", type=int, default=24, help="max holding bars for 1h strategies")
+    parser.add_argument("--max-hold-bars-4h", type=int, default=18, help="max holding bars for 4h strategies")
+    parser.add_argument("--extended-hold-bars-1h", type=int, default=12, help="extra bars after profitable max-hold extension for 1h")
+    parser.add_argument("--extended-hold-bars-4h", type=int, default=6, help="extra bars after profitable max-hold extension for 4h")
+    parser.add_argument("--min-profit-to-extend", type=float, default=0.025, help="profit required to switch max-hold exit to trailing")
+    parser.add_argument("--trailing-after-max-hold-pct", type=float, default=0.025, help="trailing pullback after max-hold extension")
+    parser.add_argument("--fee-rate", type=float, default=MAKER_FEE_RATE, help="estimated fill fee rate for backtest")
+    parser.add_argument("--funding-cost-rate-per-8h", type=float, default=FUNDING_COST_RATE_PER_8H, help="estimated funding cost per 8h")
+    parser.add_argument("--fetch-timeout-ms", type=int, default=15000, help="ccxt request timeout in milliseconds")
+    parser.add_argument("--fetch-retries", type=int, default=1, help="OHLCV fetch retry count")
+    parser.add_argument("--min-trades", type=int, default=6, help="minimum closed trades required to qualify")
+    parser.add_argument("--min-side-ratio", type=float, default=0.10, help="minimum smaller-side trade ratio")
+    parser.add_argument("--fold-count", type=int, default=4, help="number of equity folds for stability check")
+    parser.add_argument("--min-profitable-fold-ratio", type=float, default=0.75, help="minimum ratio of profitable folds")
+    parser.add_argument("--lock-timeout-minutes", type=float, default=120.0, help="remove optimizer lock after this many minutes")
+    parser.add_argument("--show", type=int, default=30, help="number of rows to print")
+    parser.add_argument("--min-score", type=float, default=1.0, help="write all rows with score >= this value to latest-json")
+    parser.add_argument("--max-leaders", type=int, default=0, help="cap latest-json leaders; 0 means no cap")
+    parser.add_argument("--output", default="quant_futures_bot/data/macro_rolling_backtest.csv", help="CSV output path")
+    parser.add_argument("--latest-json", default="quant_futures_bot/data/macro_strategy_latest.json", help="latest strategy JSON path")
+    args = parser.parse_args()
+
+    interval_seconds = max(60, int(args.interval_minutes * 60))
+    if args.run_once:
+        with RunLock(DATA_DIR / "macro_optimizer.lock", int(args.lock_timeout_minutes * 60)) as locked:
+            if locked:
+                run_once(args)
+        return
+    if args.run_once_first:
+        with RunLock(DATA_DIR / "macro_optimizer.lock", int(args.lock_timeout_minutes * 60)) as locked:
+            if locked:
+                run_once(args)
+    while True:
+        next_at = datetime.fromtimestamp(time.time() + interval_seconds).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"next macro rolling backtest at {next_at}", flush=True)
+        time.sleep(interval_seconds)
+        with RunLock(DATA_DIR / "macro_optimizer.lock", int(args.lock_timeout_minutes * 60)) as locked:
+            if locked:
+                run_once(args)
+
+
+if __name__ == "__main__":
+    main()
+
