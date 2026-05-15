@@ -214,14 +214,14 @@ def main() -> None:
     )
     parser.add_argument("--fetch-timeout-ms", type=int, default=15000, help="ccxt request timeout in milliseconds")
     parser.add_argument("--fetch-retries", type=int, default=1, help="OHLCV fetch retry count per symbol/timeframe")
-    parser.add_argument("--min-trades", type=int, default=8, help="minimum closed trades required to qualify")
-    parser.add_argument("--min-side-ratio", type=float, default=0.20, help="minimum smaller-side trade ratio, e.g. 0.2 prevents one-sided overfit")
+    parser.add_argument("--min-trades", type=int, default=4, help="minimum closed trades required to qualify")
+    parser.add_argument("--min-side-ratio", type=float, default=0.0, help="minimum smaller-side trade ratio; 0 allows one-sided altcoin strategies")
     parser.add_argument("--fold-count", type=int, default=4, help="number of recent equity folds for stability check")
-    parser.add_argument("--min-profitable-fold-ratio", type=float, default=1.0, help="minimum ratio of profitable folds")
+    parser.add_argument("--min-profitable-fold-ratio", type=float, default=0.25, help="minimum ratio of profitable folds")
     parser.add_argument("--lock-timeout-minutes", type=float, default=120.0, help="remove optimizer lock after this many minutes")
     parser.add_argument("--show", type=int, default=30, help="number of rows to print")
-    parser.add_argument("--min-score", type=float, default=1.0, help="write all rows with score >= this value to latest-json")
-    parser.add_argument("--max-leaders", type=int, default=0, help="cap latest-json leaders; 0 means no cap")
+    parser.add_argument("--min-score", type=float, default=0.0, help="write all rows with score >= this value to latest-json")
+    parser.add_argument("--max-leaders", type=int, default=30, help="cap latest-json leaders; 0 means no cap")
     parser.add_argument(
         "--output",
         default="quant_futures_bot/data/altcoin_top100_rolling_backtest.csv",

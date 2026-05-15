@@ -194,6 +194,15 @@ sudo systemctl stop quant-altcoin-optimizer.timer quant-altcoin-optimizer.servic
 sudo systemctl stop quant-altcoin-optimizer.service && rm -f /opt/quant-futures-bot/quant_futures_bot/data/altcoin_optimizer.lock && sudo systemctl start --no-block quant-altcoin-optimizer.service
 ```
 
+当前山寨币筛选参数：
+
+- `min_score=0`
+- `max_leaders=30`
+- `min_trades=4`
+- `min_side_ratio=0`，允许单边策略
+- `fold_count=4`
+- `min_profitable_fold_ratio=0.25`
+
 ## 宏观映射服务
 
 宏观映射会自动寻找 Binance USDT 合约中实际存在的黄金、白银、美股、指数、商品等映射合约。没有的标的会跳过。

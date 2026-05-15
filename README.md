@@ -41,13 +41,13 @@ python -m quant_futures_bot.strategy_optimizer
 山寨币成交量前 100 回测：
 
 ```bash
-python -m quant_futures_bot.altcoin_top_volume_backtest --top 100 --limit 1000 --timeframes 15m,30m --show 30 --min-trades 8 --min-side-ratio 0.20 --fold-count 4 --min-profitable-fold-ratio 1.0 --fee-rate 0.0002 --funding-cost-rate-per-8h 0.0001
+python -m quant_futures_bot.altcoin_top_volume_backtest --top 100 --limit 1000 --timeframes 15m,30m --show 30 --min-trades 4 --min-side-ratio 0 --fold-count 4 --min-profitable-fold-ratio 0.25 --fee-rate 0.0002 --funding-cost-rate-per-8h 0.0001
 ```
 
 山寨币滚动优化：
 
 ```bash
-python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 100 --limit 1000 --timeframes 15m,30m --show 30 --min-score 1.0 --max-leaders 0
+python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 100 --limit 1000 --timeframes 15m,30m --show 30 --min-score 0 --max-leaders 30
 ```
 
 宏观映射回测优化：
@@ -91,7 +91,7 @@ download_historical_ohlcv.bat
 - 时间周期：`15m`、`30m`
 - 策略候选：短周期动量突破、成交量突破、波动率扩张突破
 - 优化周期：每 1 小时
-- 运行范围：所有 `score >= 1.0` 的组合，不再限制前 5
+- 运行范围：最多 30 个 `score >= 0` 的组合，避免策略池被过严条件筛空
 - 策略文件：`quant_futures_bot/data/altcoin_strategy_latest.json`
 - Testnet 状态：`quant_futures_bot/data/altcoin_testnet_latest.json`
 - 日志：`quant_futures_bot/logs/altcoin_strategy.log`、`quant_futures_bot/logs/altcoin_testnet.log`
@@ -99,9 +99,9 @@ download_historical_ohlcv.bat
 山寨币筛选默认要求：
 
 - 回测长度：`1000` 根 K 线
-- 至少 `8` 笔平仓交易
-- 多空不能严重偏科，较少方向交易占比不低于 `20%`
-- 最近 `4` 段样本必须全部盈利
+- 至少 `4` 笔平仓交易
+- 允许单边策略，`min_side_ratio=0`
+- 最近 `4` 段样本至少 `25%` 盈利
 - 回测扣除 maker 手续费 `0.02%` 和保守资金费每 8 小时 `0.01%`
 - 输出拆分 `L/S`、`Lpnl`、`Spnl`、`side`、`folds`
 
