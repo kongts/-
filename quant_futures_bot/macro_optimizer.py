@@ -24,7 +24,20 @@ from .strategy_manager import StrategyManager
 
 
 DEFAULT_TIMEFRAMES = ["1h", "4h"]
-DEFAULT_STRATEGIES = ["ma_trend", "breakout_20", "breakout_40", "mean_reversion_20"]
+DEFAULT_STRATEGIES = [
+    "ma_trend",
+    "rsi_range",
+    "breakout_20",
+    "breakout_40",
+    "breakout_80",
+    "ma_pullback_1",
+    "ma_pullback_2",
+    "rsi_momentum_55",
+    "rsi_momentum_60",
+    "mean_reversion_10_1_5",
+    "mean_reversion_20",
+    "mean_reversion_30",
+]
 
 
 @dataclass

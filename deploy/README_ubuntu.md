@@ -247,6 +247,7 @@ cd /opt/quant-futures-bot && sudo systemctl stop quant-altcoin-websocket.service
 - `min_side_ratio=0`
 - `fold_count=4`
 - `min_profitable_fold_ratio=0.25`
+- 默认回测候选已扩展到动量突破、成交量突破、波动突破、10/20/40 突破、MA 回撤、RSI 动量、均值回归。
 
 ## 宏观映射服务
 

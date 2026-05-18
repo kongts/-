@@ -17,7 +17,25 @@ from .strategy_manager import StrategyManager
 
 
 DEFAULT_TIMEFRAMES = ["15m", "30m"]
-DEFAULT_STRATEGIES = ["alt_momentum_12", "alt_volume_breakout", "alt_volatility_breakout"]
+DEFAULT_STRATEGIES = [
+    "alt_momentum_6",
+    "alt_momentum_12",
+    "alt_momentum_24",
+    "alt_volume_breakout_12_1_5",
+    "alt_volume_breakout",
+    "alt_volume_breakout_30_3",
+    "alt_volatility_breakout_12_1_2",
+    "alt_volatility_breakout",
+    "alt_volatility_breakout_30_2",
+    "breakout_10",
+    "breakout_20",
+    "breakout_40",
+    "ma_pullback_1",
+    "ma_pullback_2",
+    "rsi_momentum_55",
+    "mean_reversion_10_1_5",
+    "mean_reversion_20",
+]
 EXCLUDED_BASES = {
     "BTC",
     "ETH",
