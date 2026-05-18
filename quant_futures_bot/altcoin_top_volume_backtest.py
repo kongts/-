@@ -256,8 +256,10 @@ def backtest_top_volume(
     take_profit_pct: float,
     max_hold_bars_15m: int,
     max_hold_bars_30m: int,
+    max_hold_bars_2h: int,
     extended_hold_bars_15m: int,
     extended_hold_bars_30m: int,
+    extended_hold_bars_2h: int,
     min_profit_to_extend: float,
     trailing_after_max_hold_pct: float,
     fee_rate: float,
@@ -290,8 +292,13 @@ def backtest_top_volume(
                     print(f"symbol_skipped symbol={symbol} timeframe={timeframe} reason=fetch_failed error={exc}", flush=True)
                     continue
                 data_source = provider.last_source_by_symbol.get(symbol, "exchange")
-                max_hold_bars = max_hold_bars_for_timeframe(timeframe, max_hold_bars_15m, max_hold_bars_30m)
-                extended_hold_bars = max_hold_bars_for_timeframe(timeframe, extended_hold_bars_15m, extended_hold_bars_30m)
+                max_hold_bars = max_hold_bars_for_timeframe(timeframe, max_hold_bars_15m, max_hold_bars_30m, max_hold_bars_2h)
+                extended_hold_bars = max_hold_bars_for_timeframe(
+                    timeframe,
+                    extended_hold_bars_15m,
+                    extended_hold_bars_30m,
+                    extended_hold_bars_2h,
+                )
                 jobs = [
                     (
                         symbol,
@@ -415,11 +422,13 @@ def first_float(*values) -> float:
     return 0.0
 
 
-def max_hold_bars_for_timeframe(timeframe: str, max_hold_bars_15m: int, max_hold_bars_30m: int) -> int:
+def max_hold_bars_for_timeframe(timeframe: str, max_hold_bars_15m: int, max_hold_bars_30m: int, max_hold_bars_2h: int) -> int:
     if timeframe == "15m":
         return max_hold_bars_15m
     if timeframe == "30m":
         return max_hold_bars_30m
+    if timeframe == "2h":
+        return max_hold_bars_2h
     return 0
 
 
@@ -436,8 +445,10 @@ def main() -> None:
     parser.add_argument("--take-profit-pct", type=float, default=0.06, help="take profit percentage, e.g. 0.06 = 6%%")
     parser.add_argument("--max-hold-bars-15m", type=int, default=8, help="max holding bars for 15m strategies")
     parser.add_argument("--max-hold-bars-30m", type=int, default=6, help="max holding bars for 30m strategies")
+    parser.add_argument("--max-hold-bars-2h", type=int, default=12, help="max holding bars for 2h strategies")
     parser.add_argument("--extended-hold-bars-15m", type=int, default=4, help="extra bars after profitable max-hold extension for 15m strategies")
     parser.add_argument("--extended-hold-bars-30m", type=int, default=3, help="extra bars after profitable max-hold extension for 30m strategies")
+    parser.add_argument("--extended-hold-bars-2h", type=int, default=6, help="extra bars after profitable max-hold extension for 2h strategies")
     parser.add_argument("--min-profit-to-extend", type=float, default=0.03, help="profit required to switch max-hold exit to trailing")
     parser.add_argument("--trailing-after-max-hold-pct", type=float, default=0.03, help="trailing pullback after max-hold extension")
     parser.add_argument("--fee-rate", type=float, default=config.MAKER_FEE_RATE, help="estimated fill fee rate for backtest")
@@ -472,8 +483,10 @@ def main() -> None:
         take_profit_pct=args.take_profit_pct,
         max_hold_bars_15m=args.max_hold_bars_15m,
         max_hold_bars_30m=args.max_hold_bars_30m,
+        max_hold_bars_2h=args.max_hold_bars_2h,
         extended_hold_bars_15m=args.extended_hold_bars_15m,
         extended_hold_bars_30m=args.extended_hold_bars_30m,
+        extended_hold_bars_2h=args.extended_hold_bars_2h,
         min_profit_to_extend=args.min_profit_to_extend,
         trailing_after_max_hold_pct=args.trailing_after_max_hold_pct,
         fee_rate=args.fee_rate,

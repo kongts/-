@@ -21,8 +21,9 @@ def run_once(args: argparse.Namespace) -> None:
         f"strategy_workers={args.strategy_workers} "
         f"stop_loss={args.stop_loss_pct:.2%} take_profit={args.take_profit_pct:.2%} "
         f"max_margin_ratio={args.max_margin_ratio:.2%} leverage={args.leverage}x "
-        f"max_hold_15m={args.max_hold_bars_15m} max_hold_30m={args.max_hold_bars_30m} "
+        f"max_hold_15m={args.max_hold_bars_15m} max_hold_30m={args.max_hold_bars_30m} max_hold_2h={args.max_hold_bars_2h} "
         f"extended_hold_15m={args.extended_hold_bars_15m} extended_hold_30m={args.extended_hold_bars_30m} "
+        f"extended_hold_2h={args.extended_hold_bars_2h} "
         f"min_profit_to_extend={args.min_profit_to_extend:.2%} trailing_after_max_hold={args.trailing_after_max_hold_pct:.2%} "
         f"fee_rate={args.fee_rate:.4%} funding_cost_per_8h={args.funding_cost_rate_per_8h:.4%} "
         f"fetch_timeout_ms={args.fetch_timeout_ms} fetch_retries={args.fetch_retries} "
@@ -41,8 +42,10 @@ def run_once(args: argparse.Namespace) -> None:
         take_profit_pct=args.take_profit_pct,
         max_hold_bars_15m=args.max_hold_bars_15m,
         max_hold_bars_30m=args.max_hold_bars_30m,
+        max_hold_bars_2h=args.max_hold_bars_2h,
         extended_hold_bars_15m=args.extended_hold_bars_15m,
         extended_hold_bars_30m=args.extended_hold_bars_30m,
+        extended_hold_bars_2h=args.extended_hold_bars_2h,
         min_profit_to_extend=args.min_profit_to_extend,
         trailing_after_max_hold_pct=args.trailing_after_max_hold_pct,
         fee_rate=args.fee_rate,
@@ -223,8 +226,10 @@ def main() -> None:
     parser.add_argument("--take-profit-pct", type=float, default=0.06, help="take profit percentage, e.g. 0.06 = 6%%")
     parser.add_argument("--max-hold-bars-15m", type=int, default=8, help="max holding bars for 15m strategies")
     parser.add_argument("--max-hold-bars-30m", type=int, default=6, help="max holding bars for 30m strategies")
+    parser.add_argument("--max-hold-bars-2h", type=int, default=12, help="max holding bars for 2h strategies")
     parser.add_argument("--extended-hold-bars-15m", type=int, default=4, help="extra bars after profitable max-hold extension for 15m strategies")
     parser.add_argument("--extended-hold-bars-30m", type=int, default=3, help="extra bars after profitable max-hold extension for 30m strategies")
+    parser.add_argument("--extended-hold-bars-2h", type=int, default=6, help="extra bars after profitable max-hold extension for 2h strategies")
     parser.add_argument("--min-profit-to-extend", type=float, default=0.03, help="profit required to switch max-hold exit to trailing")
     parser.add_argument("--trailing-after-max-hold-pct", type=float, default=0.03, help="trailing pullback after max-hold extension")
     parser.add_argument("--fee-rate", type=float, default=MAKER_FEE_RATE, help="estimated fill fee rate for backtest")

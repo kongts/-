@@ -249,6 +249,11 @@ cd /opt/quant-futures-bot && sudo systemctl stop quant-altcoin-websocket.service
 - `min_profitable_fold_ratio=0.25`
 - 默认回测候选已扩展到动量突破、成交量突破、波动突破、10/20/40 突破、MA 回撤、RSI 动量、均值回归。
 - systemd 默认使用 `--strategy-workers 4` 并行回测策略；CPU 较小可改成 `2`，CPU 充足可手动改成 `6` 或 `8`。
+- 手动测试 `2h` K 线可运行：
+
+```bash
+cd /opt/quant-futures-bot && rm -f quant_futures_bot/data/altcoin_optimizer.lock && /opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 50 --limit 800 --timeframes 2h --strategy-workers 4 --max-hold-bars-2h 12 --extended-hold-bars-2h 6
+```
 
 ## 宏观映射服务
 

@@ -65,10 +65,22 @@ python -m quant_futures_bot.altcoin_top_volume_backtest --top 100 --limit 1000 -
 python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 100 --limit 1000 --timeframes 15m,30m --show 30 --min-score 0 --max-leaders 30
 ```
 
+山寨币 2h K 线回测：
+
+```bash
+python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 50 --limit 800 --timeframes 2h --strategy-workers 4 --max-hold-bars-2h 12 --extended-hold-bars-2h 6 --show 30
+```
+
 宏观映射回测优化：
 
 ```bash
 python -m quant_futures_bot.macro_optimizer --run-once --top 50 --limit 1000 --timeframes 1h,4h --show 30 --min-score 1.0 --max-leaders 0
+```
+
+宏观 2h K 线回测：
+
+```bash
+python -m quant_futures_bot.macro_optimizer --run-once --top 50 --limit 800 --timeframes 2h --strategy-workers 4 --max-hold-bars-2h 12 --extended-hold-bars-2h 6 --show 30
 ```
 
 查看账户、持仓、挂单和已实现盈亏：
@@ -113,7 +125,7 @@ run_close_all_positions.bat
 ### 2. 山寨币
 
 - 标的：Binance USDT 合约成交量前 100，排除部分主流币、稳定币和宏观映射类标的
-- 时间周期：`15m`、`30m`
+- 时间周期：默认 `15m`、`30m`；手动回测可用 `2h`
 - 策略候选：短周期动量突破、成交量突破、波动率扩张突破、10/20/40 突破、MA 回撤、RSI 动量、均值回归
 - 优化周期：每 1 小时
 - 实时执行：默认每 60 秒执行一次 live signal check，同时保留 15m/30m 收线检查
@@ -135,7 +147,7 @@ run_close_all_positions.bat
 ### 3. 宏观映射
 
 - 标的：交易所实际支持的黄金、白银、美股、指数、商品映射合约
-- 时间周期：`1h`、`4h`
+- 时间周期：默认 `1h`、`4h`；手动回测可用 `2h`
 - 策略候选：MA 趋势、RSI、20/40/80 突破、MA 回撤、RSI 动量、10/20/30 均值回归
 - 优化周期：每 4 小时
 - 实时执行：默认每 60 秒执行一次 live signal check，同时保留 1h/4h 收线检查

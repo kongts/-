@@ -67,9 +67,11 @@ class MacroBacktestScore:
     score: float
 
 
-def max_hold_bars_for_timeframe(timeframe: str, max_hold_bars_1h: int, max_hold_bars_4h: int) -> int:
+def max_hold_bars_for_timeframe(timeframe: str, max_hold_bars_1h: int, max_hold_bars_2h: int, max_hold_bars_4h: int) -> int:
     if timeframe == "1h":
         return max_hold_bars_1h
+    if timeframe == "2h":
+        return max_hold_bars_2h
     if timeframe == "4h":
         return max_hold_bars_4h
     return 0
@@ -101,8 +103,10 @@ def backtest_macro_markets(
     stop_loss_pct: float,
     take_profit_pct: float,
     max_hold_bars_1h: int,
+    max_hold_bars_2h: int,
     max_hold_bars_4h: int,
     extended_hold_bars_1h: int,
+    extended_hold_bars_2h: int,
     extended_hold_bars_4h: int,
     min_profit_to_extend: float,
     trailing_after_max_hold_pct: float,
@@ -142,8 +146,13 @@ def backtest_macro_markets(
                     print(f"macro_symbol_skipped symbol={market.symbol} timeframe={timeframe} reason=fetch_failed error={exc}", flush=True)
                     continue
                 data_source = provider.last_source_by_symbol.get(market.symbol, "exchange")
-                max_hold_bars = max_hold_bars_for_timeframe(timeframe, max_hold_bars_1h, max_hold_bars_4h)
-                extended_hold_bars = max_hold_bars_for_timeframe(timeframe, extended_hold_bars_1h, extended_hold_bars_4h)
+                max_hold_bars = max_hold_bars_for_timeframe(timeframe, max_hold_bars_1h, max_hold_bars_2h, max_hold_bars_4h)
+                extended_hold_bars = max_hold_bars_for_timeframe(
+                    timeframe,
+                    extended_hold_bars_1h,
+                    extended_hold_bars_2h,
+                    extended_hold_bars_4h,
+                )
                 jobs = [
                     (
                         market.symbol,
@@ -357,8 +366,10 @@ def run_once(args: argparse.Namespace) -> None:
         stop_loss_pct=args.stop_loss_pct,
         take_profit_pct=args.take_profit_pct,
         max_hold_bars_1h=args.max_hold_bars_1h,
+        max_hold_bars_2h=args.max_hold_bars_2h,
         max_hold_bars_4h=args.max_hold_bars_4h,
         extended_hold_bars_1h=args.extended_hold_bars_1h,
+        extended_hold_bars_2h=args.extended_hold_bars_2h,
         extended_hold_bars_4h=args.extended_hold_bars_4h,
         min_profit_to_extend=args.min_profit_to_extend,
         trailing_after_max_hold_pct=args.trailing_after_max_hold_pct,
@@ -406,8 +417,10 @@ def main() -> None:
     parser.add_argument("--stop-loss-pct", type=float, default=0.02, help="stop loss percentage")
     parser.add_argument("--take-profit-pct", type=float, default=0.05, help="take profit percentage")
     parser.add_argument("--max-hold-bars-1h", type=int, default=24, help="max holding bars for 1h strategies")
+    parser.add_argument("--max-hold-bars-2h", type=int, default=12, help="max holding bars for 2h strategies")
     parser.add_argument("--max-hold-bars-4h", type=int, default=18, help="max holding bars for 4h strategies")
     parser.add_argument("--extended-hold-bars-1h", type=int, default=12, help="extra bars after profitable max-hold extension for 1h")
+    parser.add_argument("--extended-hold-bars-2h", type=int, default=6, help="extra bars after profitable max-hold extension for 2h")
     parser.add_argument("--extended-hold-bars-4h", type=int, default=6, help="extra bars after profitable max-hold extension for 4h")
     parser.add_argument("--min-profit-to-extend", type=float, default=0.025, help="profit required to switch max-hold exit to trailing")
     parser.add_argument("--trailing-after-max-hold-pct", type=float, default=0.025, help="trailing pullback after max-hold extension")
