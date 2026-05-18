@@ -102,6 +102,13 @@ python -m quant_futures_bot.close_all_positions --confirm YES
 python -m quant_futures_bot.historical_data --start 2022-01-01 --end 2026-01-01 --timeframes 15m,30m,1h,4h,6h --include-main --include-altcoin-latest --include-macro-latest
 ```
 
+下载成交量前 50 山寨币的 `30m/2h` K 线并用本地缓存回测：
+
+```bash
+python -m quant_futures_bot.historical_data --no-include-main --include-altcoin-top-volume --top 50 --start 2025-01-01 --end 2026-05-19 --timeframes 30m,2h
+python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 50 --limit 800 --timeframes 30m,2h --strategy-workers 4 --data-root quant_futures_bot/data/historical_ohlcv/binance_usdt_futures
+```
+
 Windows 可直接运行对应 `.bat`：
 
 ```bat
@@ -228,6 +235,8 @@ error
 ```bash
 quant_futures_bot/data/historical_ohlcv/binance_usdt_futures/
 ```
+
+optimizer 加上 `--data-root quant_futures_bot/data/historical_ohlcv/binance_usdt_futures` 后，会优先读取本地 `csv.gz` K 线；如果某个 symbol/timeframe 没有缓存，才回退到交易所拉取。
 
 目录结构：
 

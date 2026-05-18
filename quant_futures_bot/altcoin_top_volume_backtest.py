@@ -13,6 +13,8 @@ import pandas as pd
 from . import config
 from .backtest import Backtester, BacktestResult
 from .data import MarketDataProvider
+from .historical_data import DEFAULT_ROOT as DEFAULT_HISTORICAL_ROOT
+from .historical_data import ohlcv_path, read_existing
 from .indicators import add_indicators
 from .strategy_manager import StrategyManager
 
@@ -271,6 +273,7 @@ def backtest_top_volume(
     fold_count: int,
     min_profitable_fold_ratio: float,
     strategy_workers: int = 1,
+    data_root: Path | None = None,
 ) -> list[AltcoinBacktestScore]:
     provider = MarketDataProvider(use_exchange=True, fallback_to_synthetic=False)
     if provider.exchange is not None:
@@ -287,7 +290,7 @@ def backtest_top_volume(
             for timeframe in timeframes:
                 print(f"fetching_ohlcv {idx}/{len(top_symbols)} {symbol} timeframe={timeframe} limit={candle_limit}", flush=True)
                 try:
-                    frame = fetch_frame_with_retries(provider, symbol, timeframe, candle_limit, fetch_retries)
+                    frame = fetch_frame_with_retries(provider, symbol, timeframe, candle_limit, fetch_retries, data_root=data_root)
                 except Exception as exc:
                     print(f"symbol_skipped symbol={symbol} timeframe={timeframe} reason=fetch_failed error={exc}", flush=True)
                     continue
@@ -369,7 +372,13 @@ def fetch_frame_with_retries(
     timeframe: str,
     candle_limit: int,
     fetch_retries: int,
+    data_root: Path | None = None,
 ) -> pd.DataFrame:
+    if data_root is not None:
+        frame = read_cached_frame(data_root, symbol, timeframe, candle_limit)
+        if frame is not None:
+            provider.last_source_by_symbol[symbol] = "local_csv"
+            return add_indicators(frame)
     attempts = max(1, fetch_retries + 1)
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
@@ -381,6 +390,18 @@ def fetch_frame_with_retries(
             if attempt < attempts:
                 time.sleep(min(5, attempt * 2))
     raise RuntimeError(str(last_error))
+
+
+def read_cached_frame(root: Path, symbol: str, timeframe: str, candle_limit: int) -> pd.DataFrame | None:
+    path = ohlcv_path(root, symbol, timeframe)
+    if not path.exists():
+        return None
+    frame = read_existing(path)
+    if frame.empty:
+        return None
+    frame = frame.sort_values("timestamp").tail(candle_limit).reset_index(drop=True)
+    print(f"cached_ohlcv symbol={symbol} timeframe={timeframe} rows={len(frame)} path={path}", flush=True)
+    return frame
 
 
 def write_csv(path: Path, rows: list[AltcoinBacktestScore]) -> None:
@@ -461,6 +482,7 @@ def main() -> None:
     parser.add_argument("--fetch-timeout-ms", type=int, default=15000, help="ccxt request timeout in milliseconds")
     parser.add_argument("--fetch-retries", type=int, default=1, help="OHLCV fetch retry count per symbol/timeframe")
     parser.add_argument("--strategy-workers", type=int, default=1, help="parallel worker processes for strategy backtests")
+    parser.add_argument("--data-root", default="", help=f"read cached OHLCV csv.gz from this root; default example: {DEFAULT_HISTORICAL_ROOT}")
     parser.add_argument("--min-trades", type=int, default=4, help="minimum closed trades required to qualify")
     parser.add_argument("--min-side-ratio", type=float, default=0.0, help="minimum smaller-side trade ratio; 0 allows one-sided altcoin strategies")
     parser.add_argument("--fold-count", type=int, default=4, help="number of recent equity folds for stability check")
@@ -471,6 +493,7 @@ def main() -> None:
 
     timeframes = [item.strip() for item in args.timeframes.split(",") if item.strip()]
     strategies = [item.strip() for item in args.strategies.split(",") if item.strip()]
+    data_root = Path(args.data_root) if args.data_root else None
     rows = backtest_top_volume(
         top=args.top,
         timeframes=timeframes,
@@ -498,6 +521,7 @@ def main() -> None:
         fold_count=args.fold_count,
         min_profitable_fold_ratio=args.min_profitable_fold_ratio,
         strategy_workers=args.strategy_workers,
+        data_root=data_root,
     )
     if rows:
         output = Path(args.output)

@@ -19,6 +19,7 @@ from .altcoin_top_volume_backtest import (
 )
 from .config import DATA_DIR, FUNDING_COST_RATE_PER_8H, LOG_DIR, MAKER_FEE_RATE
 from .data import MarketDataProvider
+from .historical_data import DEFAULT_ROOT as DEFAULT_HISTORICAL_ROOT
 from .macro_markets import fetch_supported_macro_markets
 from .strategy_manager import StrategyManager
 
@@ -119,6 +120,7 @@ def backtest_macro_markets(
     fold_count: int,
     min_profitable_fold_ratio: float,
     strategy_workers: int = 1,
+    data_root: Path | None = None,
 ) -> list[MacroBacktestScore]:
     provider = MarketDataProvider(use_exchange=True, fallback_to_synthetic=False)
     if provider.exchange is not None:
@@ -141,7 +143,7 @@ def backtest_macro_markets(
             for timeframe in timeframes:
                 print(f"fetching_ohlcv_macro {idx}/{len(markets)} {market.symbol} timeframe={timeframe} limit={candle_limit}", flush=True)
                 try:
-                    frame = fetch_frame_with_retries(provider, market.symbol, timeframe, candle_limit, fetch_retries)
+                    frame = fetch_frame_with_retries(provider, market.symbol, timeframe, candle_limit, fetch_retries, data_root=data_root)
                 except Exception as exc:
                     print(f"macro_symbol_skipped symbol={market.symbol} timeframe={timeframe} reason=fetch_failed error={exc}", flush=True)
                     continue
@@ -350,7 +352,7 @@ def run_once(args: argparse.Namespace) -> None:
     log(
         "macro_config "
         f"top={args.top} limit={args.limit} timeframes={args.timeframes} strategies={args.strategies} "
-        f"strategy_workers={args.strategy_workers} "
+        f"strategy_workers={args.strategy_workers} data_root={args.data_root or '-'} "
         f"stop_loss={args.stop_loss_pct:.2%} take_profit={args.take_profit_pct:.2%} "
         f"max_margin_ratio={args.max_margin_ratio:.2%} leverage={args.leverage}x "
         f"min_trades={args.min_trades} min_side_ratio={args.min_side_ratio:.0%} "
@@ -382,6 +384,7 @@ def run_once(args: argparse.Namespace) -> None:
         fold_count=args.fold_count,
         min_profitable_fold_ratio=args.min_profitable_fold_ratio,
         strategy_workers=args.strategy_workers,
+        data_root=Path(args.data_root) if args.data_root else None,
     )
     if not rows:
         log("no macro rows generated; Binance may not expose mapped macro symbols for this account/region")
@@ -429,6 +432,7 @@ def main() -> None:
     parser.add_argument("--fetch-timeout-ms", type=int, default=15000, help="ccxt request timeout in milliseconds")
     parser.add_argument("--fetch-retries", type=int, default=1, help="OHLCV fetch retry count")
     parser.add_argument("--strategy-workers", type=int, default=1, help="parallel worker processes for strategy backtests")
+    parser.add_argument("--data-root", default="", help=f"read cached OHLCV csv.gz from this root; default example: {DEFAULT_HISTORICAL_ROOT}")
     parser.add_argument("--min-trades", type=int, default=6, help="minimum closed trades required to qualify")
     parser.add_argument("--min-side-ratio", type=float, default=0.10, help="minimum smaller-side trade ratio")
     parser.add_argument("--fold-count", type=int, default=4, help="number of equity folds for stability check")

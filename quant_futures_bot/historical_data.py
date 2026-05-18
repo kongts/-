@@ -17,6 +17,26 @@ DEFAULT_END = "2026-01-01"
 DEFAULT_TIMEFRAMES = ["15m", "30m", "1h", "4h", "6h"]
 DEFAULT_SYMBOLS = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"]
 DEFAULT_ROOT = DATA_DIR / "historical_ohlcv" / "binance_usdt_futures"
+EXCLUDED_ALTCOIN_BASES = {
+    "BTC",
+    "ETH",
+    "USDC",
+    "FDUSD",
+    "TUSD",
+    "USDP",
+    "DAI",
+    "XAU",
+    "XAG",
+    "CL",
+    "NATGAS",
+    "PAXG",
+    "NVDA",
+    "TSLA",
+    "MSTR",
+    "AMD",
+    "INTC",
+    "EWY",
+}
 
 
 @dataclass
@@ -61,6 +81,45 @@ def make_exchange(timeout_ms: int):
     import ccxt
 
     return ccxt.binanceusdm({"enableRateLimit": True, "timeout": timeout_ms, "options": {"defaultType": "future"}})
+
+
+def first_float(*values) -> float:
+    for value in values:
+        if value is None or value == "":
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+def fetch_top_usdt_perpetuals(exchange, top: int, include_majors: bool) -> list[str]:
+    markets = exchange.load_markets()
+    tickers = exchange.fetch_tickers()
+    rows: list[tuple[str, float]] = []
+    for symbol, market in markets.items():
+        if not market.get("active", True):
+            continue
+        if not market.get("swap"):
+            continue
+        if market.get("quote") != "USDT":
+            continue
+        base = str(market.get("base") or "").upper()
+        if not include_majors and base in EXCLUDED_ALTCOIN_BASES:
+            continue
+        ticker = tickers.get(symbol, {})
+        quote_volume = first_float(
+            ticker.get("quoteVolume"),
+            ticker.get("info", {}).get("quoteVolume"),
+            ticker.get("info", {}).get("volume"),
+            0.0,
+        )
+        if quote_volume <= 0:
+            continue
+        rows.append((symbol, quote_volume))
+    rows.sort(key=lambda item: item[1], reverse=True)
+    return [symbol for symbol, _quote_volume in rows[:top]]
 
 
 def rows_to_frame(rows: list[list[float]]) -> pd.DataFrame:
@@ -205,7 +264,7 @@ def load_symbols_file(path: Path) -> list[str]:
     return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("#")]
 
 
-def resolve_symbols(args: argparse.Namespace) -> list[str]:
+def resolve_symbols(args: argparse.Namespace, exchange=None) -> list[str]:
     symbols: set[str] = set()
     if args.symbols:
         symbols.update(item.strip() for item in args.symbols.split(",") if item.strip())
@@ -217,6 +276,10 @@ def resolve_symbols(args: argparse.Namespace) -> list[str]:
         symbols.update(load_symbols_from_latest(DATA_DIR / "altcoin_strategy_latest.json"))
     if args.include_macro_latest:
         symbols.update(load_symbols_from_latest(DATA_DIR / "macro_strategy_latest.json"))
+    if args.include_altcoin_top_volume:
+        if exchange is None:
+            raise ValueError("exchange is required for --include-altcoin-top-volume")
+        symbols.update(fetch_top_usdt_perpetuals(exchange, args.top, args.include_majors))
     return sorted(symbol for symbol in symbols if symbol)
 
 
@@ -244,7 +307,10 @@ def main() -> None:
     parser.add_argument("--symbols-file", default="", help="text or JSON file with symbols")
     parser.add_argument("--include-main", action=argparse.BooleanOptionalAction, default=True, help="include BTC/ETH/SOL")
     parser.add_argument("--include-altcoin-latest", action="store_true", help="include symbols from altcoin_strategy_latest.json")
+    parser.add_argument("--include-altcoin-top-volume", action="store_true", help="include top-volume Binance USDT perpetual symbols")
     parser.add_argument("--include-macro-latest", action="store_true", help="include symbols from macro_strategy_latest.json")
+    parser.add_argument("--top", type=int, default=100, help="top-volume symbol count for --include-altcoin-top-volume")
+    parser.add_argument("--include-majors", action="store_true", help="include BTC/ETH and stablecoin-like symbols in top-volume selection")
     parser.add_argument("--root", default=str(DEFAULT_ROOT), help="storage root directory")
     parser.add_argument("--limit", type=int, default=1000, help="ccxt candles per request")
     parser.add_argument("--timeout-ms", type=int, default=20000, help="ccxt timeout in milliseconds")
@@ -252,14 +318,14 @@ def main() -> None:
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True, help="resume from existing csv.gz files")
     args = parser.parse_args()
 
-    symbols = resolve_symbols(args)
+    exchange = make_exchange(args.timeout_ms)
+    symbols = resolve_symbols(args, exchange)
     if not symbols:
         raise SystemExit("no symbols selected")
     timeframes = [item.strip() for item in args.timeframes.split(",") if item.strip()]
     start = parse_utc_date(args.start)
     end = parse_utc_date(args.end)
     root = Path(args.root)
-    exchange = make_exchange(args.timeout_ms)
     summaries: list[DownloadSummary] = []
     print(
         f"historical_download symbols={len(symbols)} timeframes={','.join(timeframes)} start={start.date()} end={end.date()} root={root}",

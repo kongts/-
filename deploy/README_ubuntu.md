@@ -255,6 +255,13 @@ cd /opt/quant-futures-bot && sudo systemctl stop quant-altcoin-websocket.service
 cd /opt/quant-futures-bot && rm -f quant_futures_bot/data/altcoin_optimizer.lock && /opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 50 --limit 800 --timeframes 2h --strategy-workers 4 --max-hold-bars-2h 12 --extended-hold-bars-2h 6
 ```
 
+先下载 K 线到服务器，再用本地缓存回测：
+
+```bash
+cd /opt/quant-futures-bot && /opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.historical_data --no-include-main --include-altcoin-top-volume --top 50 --start 2025-01-01 --end 2026-05-19 --timeframes 30m,2h
+cd /opt/quant-futures-bot && rm -f quant_futures_bot/data/altcoin_optimizer.lock && /opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 50 --limit 800 --timeframes 30m,2h --strategy-workers 4 --data-root quant_futures_bot/data/historical_ohlcv/binance_usdt_futures
+```
+
 ## 宏观映射服务
 
 宏观映射会自动寻找 Binance USDT 合约中实际存在的黄金、白银、美股、指数、商品等映射合约；不存在的标的会跳过。
