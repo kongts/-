@@ -18,6 +18,7 @@ def run_once(args: argparse.Namespace) -> None:
     log(
         "config "
         f"top={args.top} limit={args.limit} timeframes={args.timeframes} strategies={args.strategies} "
+        f"strategy_workers={args.strategy_workers} "
         f"stop_loss={args.stop_loss_pct:.2%} take_profit={args.take_profit_pct:.2%} "
         f"max_margin_ratio={args.max_margin_ratio:.2%} leverage={args.leverage}x "
         f"max_hold_15m={args.max_hold_bars_15m} max_hold_30m={args.max_hold_bars_30m} "
@@ -52,6 +53,7 @@ def run_once(args: argparse.Namespace) -> None:
         min_side_ratio=args.min_side_ratio,
         fold_count=args.fold_count,
         min_profitable_fold_ratio=args.min_profitable_fold_ratio,
+        strategy_workers=args.strategy_workers,
     )
     if rows:
         write_csv(Path(args.output), rows)
@@ -234,6 +236,7 @@ def main() -> None:
     )
     parser.add_argument("--fetch-timeout-ms", type=int, default=15000, help="ccxt request timeout in milliseconds")
     parser.add_argument("--fetch-retries", type=int, default=1, help="OHLCV fetch retry count per symbol/timeframe")
+    parser.add_argument("--strategy-workers", type=int, default=1, help="parallel worker processes for strategy backtests")
     parser.add_argument("--min-trades", type=int, default=4, help="minimum closed trades required to qualify")
     parser.add_argument("--min-side-ratio", type=float, default=0.0, help="minimum smaller-side trade ratio; 0 allows one-sided altcoin strategies")
     parser.add_argument("--fold-count", type=int, default=4, help="number of recent equity folds for stability check")

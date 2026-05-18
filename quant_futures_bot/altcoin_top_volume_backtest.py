@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from statistics import mean
@@ -154,6 +155,48 @@ def run_backtest(
     ).run()
 
 
+def run_backtest_job(job: tuple) -> tuple[str, BacktestResult | None, str | None]:
+    (
+        symbol,
+        frame,
+        strategy_id,
+        data_source,
+        max_margin_ratio,
+        leverage,
+        stop_loss_pct,
+        take_profit_pct,
+        max_hold_bars,
+        min_profit_to_extend,
+        trailing_after_max_hold_pct,
+        extended_hold_bars,
+        fee_rate,
+        funding_cost_rate_per_8h,
+    ) = job
+    try:
+        return (
+            strategy_id,
+            run_backtest(
+                symbol,
+                frame,
+                strategy_id,
+                data_source,
+                max_margin_ratio,
+                leverage,
+                stop_loss_pct,
+                take_profit_pct,
+                max_hold_bars,
+                min_profit_to_extend,
+                trailing_after_max_hold_pct,
+                extended_hold_bars,
+                fee_rate,
+                funding_cost_rate_per_8h,
+            ),
+            None,
+        )
+    except Exception as exc:
+        return strategy_id, None, str(exc)
+
+
 def score_result(
     result: BacktestResult,
     min_trades: int,
@@ -225,6 +268,7 @@ def backtest_top_volume(
     min_side_ratio: float,
     fold_count: int,
     min_profitable_fold_ratio: float,
+    strategy_workers: int = 1,
 ) -> list[AltcoinBacktestScore]:
     provider = MarketDataProvider(use_exchange=True, fallback_to_synthetic=False)
     if provider.exchange is not None:
@@ -233,21 +277,23 @@ def backtest_top_volume(
     scores: list[AltcoinBacktestScore] = []
     volume_rank_by_symbol = {symbol: idx for idx, (symbol, _volume) in enumerate(top_symbols, start=1)}
     quote_volume_by_symbol = dict(top_symbols)
-    for idx, (symbol, quote_volume) in enumerate(top_symbols, start=1):
-        print(f"fetching {idx}/{len(top_symbols)} {symbol} quote_volume={quote_volume:.0f}", flush=True)
-        for timeframe in timeframes:
-            print(f"fetching_ohlcv {idx}/{len(top_symbols)} {symbol} timeframe={timeframe} limit={candle_limit}", flush=True)
-            try:
-                frame = fetch_frame_with_retries(provider, symbol, timeframe, candle_limit, fetch_retries)
-            except Exception as exc:
-                print(f"symbol_skipped symbol={symbol} timeframe={timeframe} reason=fetch_failed error={exc}", flush=True)
-                continue
-            data_source = provider.last_source_by_symbol.get(symbol, "exchange")
-            max_hold_bars = max_hold_bars_for_timeframe(timeframe, max_hold_bars_15m, max_hold_bars_30m)
-            extended_hold_bars = max_hold_bars_for_timeframe(timeframe, extended_hold_bars_15m, extended_hold_bars_30m)
-            for strategy_id in strategies:
+    workers = max(1, strategy_workers)
+    executor = ProcessPoolExecutor(max_workers=workers) if workers > 1 else None
+    try:
+        for idx, (symbol, quote_volume) in enumerate(top_symbols, start=1):
+            print(f"fetching {idx}/{len(top_symbols)} {symbol} quote_volume={quote_volume:.0f}", flush=True)
+            for timeframe in timeframes:
+                print(f"fetching_ohlcv {idx}/{len(top_symbols)} {symbol} timeframe={timeframe} limit={candle_limit}", flush=True)
                 try:
-                    result = run_backtest(
+                    frame = fetch_frame_with_retries(provider, symbol, timeframe, candle_limit, fetch_retries)
+                except Exception as exc:
+                    print(f"symbol_skipped symbol={symbol} timeframe={timeframe} reason=fetch_failed error={exc}", flush=True)
+                    continue
+                data_source = provider.last_source_by_symbol.get(symbol, "exchange")
+                max_hold_bars = max_hold_bars_for_timeframe(timeframe, max_hold_bars_15m, max_hold_bars_30m)
+                extended_hold_bars = max_hold_bars_for_timeframe(timeframe, extended_hold_bars_15m, extended_hold_bars_30m)
+                jobs = [
+                    (
                         symbol,
                         frame,
                         strategy_id,
@@ -263,36 +309,47 @@ def backtest_top_volume(
                         fee_rate,
                         funding_cost_rate_per_8h,
                     )
-                except Exception as exc:
-                    print(f"backtest_error symbol={symbol} strategy={strategy_id}/{timeframe} error={exc}", flush=True)
-                    continue
-                balance = side_balance_ratio(result)
-                fold_ratio = profitable_fold_ratio(result.equity_curve, fold_count)
-                scores.append(
-                    AltcoinBacktestScore(
-                        rank=0,
-                        volume_rank=volume_rank_by_symbol[symbol],
-                        symbol=symbol,
-                        quote_volume=quote_volume_by_symbol[symbol],
-                        strategy_id=strategy_id,
-                        strategy_name=StrategyManager.available_strategy_names()[strategy_id],
-                        timeframe=timeframe,
-                        return_pct=result.return_pct,
-                        max_drawdown=result.max_drawdown,
-                        sharpe=result.sharpe,
-                        trade_count=result.trade_count,
-                        long_trade_count=result.long_trade_count,
-                        short_trade_count=result.short_trade_count,
-                        long_pnl=result.long_pnl,
-                        short_pnl=result.short_pnl,
-                        side_balance_ratio=balance,
-                        profitable_fold_ratio=fold_ratio,
-                        win_rate=result.win_rate,
-                        profit_factor=result.profit_factor,
-                        funding_cost=result.funding_cost,
-                        score=score_result(result, min_trades, min_side_ratio, min_profitable_fold_ratio, fold_count),
+                    for strategy_id in strategies
+                ]
+                if executor is None:
+                    results = [run_backtest_job(job) for job in jobs]
+                else:
+                    futures = [executor.submit(run_backtest_job, job) for job in jobs]
+                    results = [future.result() for future in as_completed(futures)]
+                for strategy_id, result, error in results:
+                    if error or result is None:
+                        print(f"backtest_error symbol={symbol} strategy={strategy_id}/{timeframe} error={error}", flush=True)
+                        continue
+                    balance = side_balance_ratio(result)
+                    fold_ratio = profitable_fold_ratio(result.equity_curve, fold_count)
+                    scores.append(
+                        AltcoinBacktestScore(
+                            rank=0,
+                            volume_rank=volume_rank_by_symbol[symbol],
+                            symbol=symbol,
+                            quote_volume=quote_volume_by_symbol[symbol],
+                            strategy_id=strategy_id,
+                            strategy_name=StrategyManager.available_strategy_names()[strategy_id],
+                            timeframe=timeframe,
+                            return_pct=result.return_pct,
+                            max_drawdown=result.max_drawdown,
+                            sharpe=result.sharpe,
+                            trade_count=result.trade_count,
+                            long_trade_count=result.long_trade_count,
+                            short_trade_count=result.short_trade_count,
+                            long_pnl=result.long_pnl,
+                            short_pnl=result.short_pnl,
+                            side_balance_ratio=balance,
+                            profitable_fold_ratio=fold_ratio,
+                            win_rate=result.win_rate,
+                            profit_factor=result.profit_factor,
+                            funding_cost=result.funding_cost,
+                            score=score_result(result, min_trades, min_side_ratio, min_profitable_fold_ratio, fold_count),
+                        )
                     )
-                )
+    finally:
+        if executor is not None:
+            executor.shutdown()
     scores.sort(key=lambda item: item.score, reverse=True)
     for rank, item in enumerate(scores, start=1):
         item.rank = rank
@@ -392,6 +449,7 @@ def main() -> None:
     )
     parser.add_argument("--fetch-timeout-ms", type=int, default=15000, help="ccxt request timeout in milliseconds")
     parser.add_argument("--fetch-retries", type=int, default=1, help="OHLCV fetch retry count per symbol/timeframe")
+    parser.add_argument("--strategy-workers", type=int, default=1, help="parallel worker processes for strategy backtests")
     parser.add_argument("--min-trades", type=int, default=4, help="minimum closed trades required to qualify")
     parser.add_argument("--min-side-ratio", type=float, default=0.0, help="minimum smaller-side trade ratio; 0 allows one-sided altcoin strategies")
     parser.add_argument("--fold-count", type=int, default=4, help="number of recent equity folds for stability check")
@@ -426,6 +484,7 @@ def main() -> None:
         min_side_ratio=args.min_side_ratio,
         fold_count=args.fold_count,
         min_profitable_fold_ratio=args.min_profitable_fold_ratio,
+        strategy_workers=args.strategy_workers,
     )
     if rows:
         output = Path(args.output)

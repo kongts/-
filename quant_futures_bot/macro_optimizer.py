@@ -114,31 +114,38 @@ def backtest_macro_markets(
     min_side_ratio: float,
     fold_count: int,
     min_profitable_fold_ratio: float,
+    strategy_workers: int = 1,
 ) -> list[MacroBacktestScore]:
     provider = MarketDataProvider(use_exchange=True, fallback_to_synthetic=False)
     if provider.exchange is not None:
         provider.exchange.timeout = fetch_timeout_ms
     markets = fetch_supported_macro_markets(top, fetch_timeout_ms=fetch_timeout_ms)
     rows: list[MacroBacktestScore] = []
-    for idx, market in enumerate(markets, start=1):
-        print(
-            f"fetching_macro {idx}/{len(markets)} {market.symbol} base={market.base} "
-            f"asset_class={market.asset_class} quote_volume={market.quote_volume:.0f}",
-            flush=True,
-        )
-        for timeframe in timeframes:
-            print(f"fetching_ohlcv_macro {idx}/{len(markets)} {market.symbol} timeframe={timeframe} limit={candle_limit}", flush=True)
-            try:
-                frame = fetch_frame_with_retries(provider, market.symbol, timeframe, candle_limit, fetch_retries)
-            except Exception as exc:
-                print(f"macro_symbol_skipped symbol={market.symbol} timeframe={timeframe} reason=fetch_failed error={exc}", flush=True)
-                continue
-            data_source = provider.last_source_by_symbol.get(market.symbol, "exchange")
-            max_hold_bars = max_hold_bars_for_timeframe(timeframe, max_hold_bars_1h, max_hold_bars_4h)
-            extended_hold_bars = max_hold_bars_for_timeframe(timeframe, extended_hold_bars_1h, extended_hold_bars_4h)
-            for strategy_id in strategies:
+    workers = max(1, strategy_workers)
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    from .altcoin_top_volume_backtest import run_backtest_job
+
+    executor = ProcessPoolExecutor(max_workers=workers) if workers > 1 else None
+    try:
+        for idx, market in enumerate(markets, start=1):
+            print(
+                f"fetching_macro {idx}/{len(markets)} {market.symbol} base={market.base} "
+                f"asset_class={market.asset_class} quote_volume={market.quote_volume:.0f}",
+                flush=True,
+            )
+            for timeframe in timeframes:
+                print(f"fetching_ohlcv_macro {idx}/{len(markets)} {market.symbol} timeframe={timeframe} limit={candle_limit}", flush=True)
                 try:
-                    result = run_backtest(
+                    frame = fetch_frame_with_retries(provider, market.symbol, timeframe, candle_limit, fetch_retries)
+                except Exception as exc:
+                    print(f"macro_symbol_skipped symbol={market.symbol} timeframe={timeframe} reason=fetch_failed error={exc}", flush=True)
+                    continue
+                data_source = provider.last_source_by_symbol.get(market.symbol, "exchange")
+                max_hold_bars = max_hold_bars_for_timeframe(timeframe, max_hold_bars_1h, max_hold_bars_4h)
+                extended_hold_bars = max_hold_bars_for_timeframe(timeframe, extended_hold_bars_1h, extended_hold_bars_4h)
+                jobs = [
+                    (
                         market.symbol,
                         frame,
                         strategy_id,
@@ -154,38 +161,49 @@ def backtest_macro_markets(
                         fee_rate,
                         funding_cost_rate_per_8h,
                     )
-                except Exception as exc:
-                    print(f"macro_backtest_error symbol={market.symbol} strategy={strategy_id}/{timeframe} error={exc}", flush=True)
-                    continue
-                balance = side_balance_ratio(result)
-                fold_ratio = profitable_fold_ratio(result.equity_curve, fold_count)
-                rows.append(
-                    MacroBacktestScore(
-                        rank=0,
-                        symbol_rank=idx,
-                        symbol=market.symbol,
-                        base=market.base,
-                        asset_class=market.asset_class,
-                        quote_volume=market.quote_volume,
-                        strategy_id=strategy_id,
-                        strategy_name=StrategyManager.available_strategy_names()[strategy_id],
-                        timeframe=timeframe,
-                        return_pct=result.return_pct,
-                        max_drawdown=result.max_drawdown,
-                        sharpe=result.sharpe,
-                        trade_count=result.trade_count,
-                        long_trade_count=result.long_trade_count,
-                        short_trade_count=result.short_trade_count,
-                        long_pnl=result.long_pnl,
-                        short_pnl=result.short_pnl,
-                        side_balance_ratio=balance,
-                        profitable_fold_ratio=fold_ratio,
-                        win_rate=result.win_rate,
-                        profit_factor=result.profit_factor,
-                        funding_cost=result.funding_cost,
-                        score=score_result(result, min_trades, min_side_ratio, min_profitable_fold_ratio, fold_count),
+                    for strategy_id in strategies
+                ]
+                if executor is None:
+                    results = [run_backtest_job(job) for job in jobs]
+                else:
+                    futures = [executor.submit(run_backtest_job, job) for job in jobs]
+                    results = [future.result() for future in as_completed(futures)]
+                for strategy_id, result, error in results:
+                    if error or result is None:
+                        print(f"macro_backtest_error symbol={market.symbol} strategy={strategy_id}/{timeframe} error={error}", flush=True)
+                        continue
+                    balance = side_balance_ratio(result)
+                    fold_ratio = profitable_fold_ratio(result.equity_curve, fold_count)
+                    rows.append(
+                        MacroBacktestScore(
+                            rank=0,
+                            symbol_rank=idx,
+                            symbol=market.symbol,
+                            base=market.base,
+                            asset_class=market.asset_class,
+                            quote_volume=market.quote_volume,
+                            strategy_id=strategy_id,
+                            strategy_name=StrategyManager.available_strategy_names()[strategy_id],
+                            timeframe=timeframe,
+                            return_pct=result.return_pct,
+                            max_drawdown=result.max_drawdown,
+                            sharpe=result.sharpe,
+                            trade_count=result.trade_count,
+                            long_trade_count=result.long_trade_count,
+                            short_trade_count=result.short_trade_count,
+                            long_pnl=result.long_pnl,
+                            short_pnl=result.short_pnl,
+                            side_balance_ratio=balance,
+                            profitable_fold_ratio=fold_ratio,
+                            win_rate=result.win_rate,
+                            profit_factor=result.profit_factor,
+                            funding_cost=result.funding_cost,
+                            score=score_result(result, min_trades, min_side_ratio, min_profitable_fold_ratio, fold_count),
+                        )
                     )
-                )
+    finally:
+        if executor is not None:
+            executor.shutdown()
     rows.sort(key=lambda item: item.score, reverse=True)
     for rank, item in enumerate(rows, start=1):
         item.rank = rank
@@ -323,6 +341,7 @@ def run_once(args: argparse.Namespace) -> None:
     log(
         "macro_config "
         f"top={args.top} limit={args.limit} timeframes={args.timeframes} strategies={args.strategies} "
+        f"strategy_workers={args.strategy_workers} "
         f"stop_loss={args.stop_loss_pct:.2%} take_profit={args.take_profit_pct:.2%} "
         f"max_margin_ratio={args.max_margin_ratio:.2%} leverage={args.leverage}x "
         f"min_trades={args.min_trades} min_side_ratio={args.min_side_ratio:.0%} "
@@ -351,6 +370,7 @@ def run_once(args: argparse.Namespace) -> None:
         min_side_ratio=args.min_side_ratio,
         fold_count=args.fold_count,
         min_profitable_fold_ratio=args.min_profitable_fold_ratio,
+        strategy_workers=args.strategy_workers,
     )
     if not rows:
         log("no macro rows generated; Binance may not expose mapped macro symbols for this account/region")
@@ -395,6 +415,7 @@ def main() -> None:
     parser.add_argument("--funding-cost-rate-per-8h", type=float, default=FUNDING_COST_RATE_PER_8H, help="estimated funding cost per 8h")
     parser.add_argument("--fetch-timeout-ms", type=int, default=15000, help="ccxt request timeout in milliseconds")
     parser.add_argument("--fetch-retries", type=int, default=1, help="OHLCV fetch retry count")
+    parser.add_argument("--strategy-workers", type=int, default=1, help="parallel worker processes for strategy backtests")
     parser.add_argument("--min-trades", type=int, default=6, help="minimum closed trades required to qualify")
     parser.add_argument("--min-side-ratio", type=float, default=0.10, help="minimum smaller-side trade ratio")
     parser.add_argument("--fold-count", type=int, default=4, help="number of equity folds for stability check")
