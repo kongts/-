@@ -136,7 +136,11 @@ class AltcoinPaperMonitor:
             f"[{cycle_started_at}] start {self.board_name} {self.execution_mode} cycle "
             f"leaders={len(leaders)} selected={len(selected_leaders)} top={self.top}"
         )
-        sync_symbols = sorted({leader["symbol"] for leader in selected_leaders} | set(self.pending_orders))
+        sync_symbols = sorted(
+            {leader["symbol"] for leader in selected_leaders}
+            | set(self.pending_orders)
+            | self.local_open_symbols()
+        )
         self.sync_exchange_account(sync_symbols)
         self.manage_pending_orders()
         self.sync_exchange_account(sync_symbols)
@@ -226,7 +230,7 @@ class AltcoinPaperMonitor:
         )
 
     def maintain_orders(self, symbols: list[str]) -> None:
-        sync_symbols = sorted(set(symbols) | set(self.pending_orders))
+        sync_symbols = sorted(set(symbols) | set(self.pending_orders) | self.local_open_symbols())
         self.sync_exchange_account(sync_symbols)
         self.manage_pending_orders()
         self.sync_exchange_account(sync_symbols)
@@ -624,6 +628,9 @@ class AltcoinPaperMonitor:
                     f"{symbol}:{pos.position_side} qty={pos.qty:.6f} entry={pos.entry_price:.6f} pnl={pos.unrealized_pnl:.2f}"
                 )
         return ";".join(active) or "-"
+
+    def local_open_symbols(self) -> set[str]:
+        return {symbol for symbol, pos in self.portfolio.positions.items() if pos.is_open()}
 
     def account_summary(self) -> str:
         return (
