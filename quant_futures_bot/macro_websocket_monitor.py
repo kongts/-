@@ -21,6 +21,7 @@ class MacroWebSocketMonitor:
         reconnect_seconds: int = 5,
         maintenance_seconds: int = 30,
         leader_refresh_seconds: int = 60,
+        live_signal_seconds: int = 60,
         run_initial_cycle: bool = True,
     ) -> None:
         parser = argparse.Namespace(
@@ -52,12 +53,14 @@ class MacroWebSocketMonitor:
         self.reconnect_seconds = max(1, reconnect_seconds)
         self.maintenance_seconds = max(5, maintenance_seconds)
         self.leader_refresh_seconds = max(15, leader_refresh_seconds)
+        self.live_signal_seconds = max(0, live_signal_seconds)
         self.monitor = build_monitor(parser)
         self.lock = threading.Lock()
         self.prices: dict[str, float] = {}
         self.last_print_time = 0.0
         self.last_maintenance_time = 0.0
         self.last_leader_refresh_time = 0.0
+        self.last_live_signal_time = 0.0
         self.last_bucket_by_timeframe: dict[str, int] = {}
         self.leaders = self.selected_leaders()
         self.leader_key = self.make_leader_key(self.leaders)
@@ -68,7 +71,8 @@ class MacroWebSocketMonitor:
     def run_forever(self) -> None:
         print(
             f"macro websocket monitor started execution_mode=testnet top={self.top} "
-            f"print_seconds={self.print_seconds} maintenance_seconds={self.maintenance_seconds}",
+            f"print_seconds={self.print_seconds} maintenance_seconds={self.maintenance_seconds} "
+            f"live_signal_seconds={self.live_signal_seconds}",
             flush=True,
         )
         while True:
@@ -130,6 +134,9 @@ class MacroWebSocketMonitor:
                     if self.ws is not None:
                         self.ws.close()
                     return
+            if self.live_signal_seconds > 0 and now_ts - self.last_live_signal_time >= self.live_signal_seconds:
+                self.last_live_signal_time = now_ts
+                self.run_strategy_cycle("live signal check")
         self.check_timeframe_boundaries()
 
     def check_timeframe_boundaries(self) -> None:
@@ -183,6 +190,7 @@ class MacroWebSocketMonitor:
         labels = [f"{leader['symbol']}:{leader['strategy_id']}/{leader['timeframe']}:bookTicker" for leader in self.leaders]
         labels.append("strategy_timer=" + ",".join(self.selected_timeframes()))
         labels.append(f"leader_refresh={self.leader_refresh_seconds}s")
+        labels.append(f"live_signal={self.live_signal_seconds}s")
         return ",".join(labels)
 
     def selected_timeframes(self) -> list[str]:
@@ -226,6 +234,7 @@ def main() -> None:
     parser.add_argument("--reconnect-seconds", type=int, default=5, help="seconds to wait before reconnecting")
     parser.add_argument("--maintenance-seconds", type=int, default=30, help="seconds between pending-order maintenance checks")
     parser.add_argument("--leader-refresh-seconds", type=int, default=60, help="seconds between strategy leader refresh checks")
+    parser.add_argument("--live-signal-seconds", type=int, default=60, help="seconds between live intrabar strategy checks; 0 disables")
     parser.add_argument("--no-initial-cycle", action="store_true", help="do not run strategy immediately on startup")
     args = parser.parse_args()
     monitor = MacroWebSocketMonitor(
@@ -235,6 +244,7 @@ def main() -> None:
         reconnect_seconds=args.reconnect_seconds,
         maintenance_seconds=args.maintenance_seconds,
         leader_refresh_seconds=args.leader_refresh_seconds,
+        live_signal_seconds=args.live_signal_seconds,
         run_initial_cycle=not args.no_initial_cycle,
     )
     monitor.run_forever()

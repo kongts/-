@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/quant-futures-bot
 EnvironmentFile=/opt/quant-futures-bot/.env
-ExecStart=/opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.altcoin_websocket_monitor --top 0 --candle-limit 220 --print-seconds 5 --maintenance-seconds 30 --leader-refresh-seconds 60
+ExecStart=/opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.altcoin_websocket_monitor --top 0 --candle-limit 220 --print-seconds 5 --maintenance-seconds 30 --leader-refresh-seconds 60 --live-signal-seconds 60
 Restart=always
 RestartSec=5
 
