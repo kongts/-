@@ -1,8 +1,9 @@
 @echo off
-set "PYTHON_EXE=%LOCALAPPDATA%\Python\pythoncore-3.14-64\python.exe"
-if not exist "%PYTHON_EXE%" (
-  echo Python not found: %PYTHON_EXE%
-  echo Please install Python 3.11+ or update PYTHON_EXE in this file.
-  exit /b 1
+setlocal
+cd /d "%~dp0"
+if exist ".venv\Scripts\python.exe" (
+  set "PYTHON_EXE=.venv\Scripts\python.exe"
+) else (
+  set "PYTHON_EXE=python"
 )
 "%PYTHON_EXE%" -m quant_futures_bot.main --offline --cycles 1

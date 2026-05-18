@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .account_sync import BinanceAccountSync
-from .config import DATA_DIR, FUNDING_COST_RATE_PER_8H, MAKER_FEE_RATE, LOG_DIR
+from .config import DATA_DIR, FUNDING_COST_RATE_PER_8H, INVERT_EXECUTION_SIGNALS, LOG_DIR, MAKER_FEE_RATE
 from .data import MarketDataProvider
 from .events import OrderStatus, SignalEvent, SignalType
 from .execution import BinanceTestnetExecution, PaperExecution
@@ -17,6 +17,7 @@ from .order_manager import OrderManager
 from .pause_manager import PauseManager
 from .portfolio import Portfolio
 from .risk_engine import RiskEngine
+from .signal_inversion import invert_signals, opposite_position_side
 from .strategy_manager import StrategyManager
 
 
@@ -88,6 +89,7 @@ class AltcoinPaperMonitor:
         self.execution_mode = execution_mode
         self.order_type = order_type
         self.maker_offset = maker_offset
+        self.invert_execution_signals = INVERT_EXECUTION_SIGNALS
         self.top = top
         self.candle_limit = candle_limit
         self.max_margin_ratio = max_margin_ratio
@@ -199,7 +201,10 @@ class AltcoinPaperMonitor:
                 manager = StrategyManager(strategy_id=strategy_id, use_saved_selection=False)
                 market_state = detect_market_state(frame)
                 current_side = self.portfolio.position_side(symbol)
-                signals = manager.generate(symbol, frame, market_state, current_side)
+                strategy_side = opposite_position_side(current_side) if self.invert_execution_signals else current_side
+                signals = manager.generate(symbol, frame, market_state, strategy_side)
+                if self.invert_execution_signals:
+                    signals = invert_signals(signals)
                 for signal in signals:
                     signals_created += 1
                     ok, filled, order_ids = self.execute_signal(signal, latest_row)
@@ -605,6 +610,7 @@ class AltcoinPaperMonitor:
             "max_hold_profit_peaks": self.max_hold_profit_peaks,
             "fee_rate": MAKER_FEE_RATE if self.order_type == "limit" else self.execution.fee_rate,
             "funding_cost_rate_per_8h": FUNDING_COST_RATE_PER_8H,
+            "invert_execution_signals": self.invert_execution_signals,
             "positions": self.portfolio.to_dict()["positions"],
         }
         self.latest_path.parent.mkdir(parents=True, exist_ok=True)

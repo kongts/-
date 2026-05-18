@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from . import config
 from .account_sync import BinanceAccountSync
 from .database import Database
 from .data import MarketDataProvider
@@ -11,6 +12,7 @@ from .logger import setup_logger
 from .market_state import detect_market_state
 from .order_manager import OrderManager
 from .risk_engine import RiskEngine
+from .signal_inversion import invert_signals, opposite_position_side
 from .state_manager import StateManager
 from .strategy_manager import StrategyManager
 from .symbol_config import enabled_symbols, get_symbol_config
@@ -108,7 +110,11 @@ class TradingSystem:
         self.latest_rows[event.symbol] = latest
         market_state = detect_market_state(event.dataframe)
         current_side = self.portfolio.position_side(event.symbol)
-        for signal in self.strategy_manager.generate(event.symbol, event.dataframe, market_state, current_side):
+        strategy_side = opposite_position_side(current_side) if config.INVERT_EXECUTION_SIGNALS else current_side
+        signals = self.strategy_manager.generate(event.symbol, event.dataframe, market_state, strategy_side)
+        if config.INVERT_EXECUTION_SIGNALS:
+            signals = invert_signals(signals)
+        for signal in signals:
             self.engine.put(signal)
 
     def on_signal(self, event) -> None:
