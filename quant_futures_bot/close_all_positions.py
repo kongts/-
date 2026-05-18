@@ -22,6 +22,7 @@ def main() -> None:
     dry_run = args.confirm != "YES"
     execution = BinanceTestnetExecution()
     exchange = execution.exchange
+    exchange.options["warnOnFetchOpenOrdersWithoutSymbol"] = False
 
     if dry_run:
         print("DRY RUN: no orders will be cancelled or submitted. Add --confirm YES to execute.")
@@ -89,13 +90,7 @@ def fetch_open_orders(exchange) -> list[dict]:
         return list(exchange.fetch_open_orders())
     except Exception as exc:
         print(f"fetch_open_orders_all_failed error={exc}")
-    orders: list[dict] = []
-    for symbol in exchange.symbols:
-        try:
-            orders.extend(exchange.fetch_open_orders(symbol))
-        except Exception:
-            continue
-    return orders
+        return []
 
 
 def active_positions(exchange) -> list[ActivePosition]:
