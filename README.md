@@ -12,16 +12,16 @@
 
 ## 当前关键行为
 
-- 默认启用反向执行：回测/优化仍按原始策略筛选，但实盘执行时 `OPEN_LONG` 会变成 `OPEN_SHORT`，`OPEN_SHORT` 会变成 `OPEN_LONG`。
+- 默认使用正向执行：回测/优化按原始策略筛选，实盘执行也按原始策略方向开平仓。
 - 山寨币和宏观 WebSocket 默认每 60 秒执行一次实时信号检查，同时保留 15m/30m 或 1h/4h 收线检查。
 - 山寨币和宏观 Testnet 默认只用 post-only 限价单，不使用市价开仓。
 - 如果同一标的连续 3 次挂单超时，会暂停该标的，记录在 runtime state JSON 中。
 - 全部平仓命令已内置：先撤未成交挂单，再用 `reduceOnly` 市价单平掉所有真实持仓。
 
-如需关闭反向执行，在 `.env` 中加入：
+如需临时启用反向执行，在 `.env` 中加入：
 
 ```bash
-INVERT_EXECUTION_SIGNALS=0
+INVERT_EXECUTION_SIGNALS=1
 ```
 
 ## 安装
@@ -36,7 +36,7 @@ pip install -r requirements.txt
 EXECUTION_MODE=testnet
 BINANCE_TESTNET_API_KEY=你的_testnet_key
 BINANCE_TESTNET_API_SECRET=你的_testnet_secret
-INVERT_EXECUTION_SIGNALS=1
+INVERT_EXECUTION_SIGNALS=0
 ```
 
 ## 本地常用命令
@@ -174,7 +174,7 @@ run_close_all_positions.bat
 
 ## 常用状态检查
 
-查看反向执行是否开启：
+查看是否启用反向执行，输出 `False` 表示当前是正向策略：
 
 ```bash
 python -c "from quant_futures_bot import config; print(config.INVERT_EXECUTION_SIGNALS)"
@@ -246,4 +246,3 @@ sudo systemctl enable --now quant-altcoin-websocket.service
 sudo systemctl enable --now quant-macro-optimizer.timer
 sudo systemctl enable --now quant-macro-websocket.service
 ```
-

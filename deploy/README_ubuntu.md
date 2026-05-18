@@ -64,10 +64,10 @@ nano /opt/quant-futures-bot/.env
 EXECUTION_MODE=testnet
 BINANCE_TESTNET_API_KEY=你的_testnet_key
 BINANCE_TESTNET_API_SECRET=你的_testnet_secret
-INVERT_EXECUTION_SIGNALS=1
+INVERT_EXECUTION_SIGNALS=0
 ```
 
-`INVERT_EXECUTION_SIGNALS=1` 表示默认反向执行策略信号；如需恢复原方向，改为 `0` 后重启服务。
+`INVERT_EXECUTION_SIGNALS=0` 表示正向执行策略信号；如需临时反向执行，改为 `1` 后重启服务。
 
 ## 推荐启动组合
 
@@ -346,4 +346,3 @@ sudo systemctl stop quant-altcoin-optimizer.timer quant-altcoin-optimizer.servic
 sudo systemctl stop quant-altcoin-paper.timer quant-altcoin-paper.service quant-altcoin-testnet.timer quant-altcoin-testnet.service
 sudo systemctl stop quant-macro-optimizer.timer quant-macro-optimizer.service quant-macro-websocket.service
 ```
-

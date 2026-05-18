@@ -33,7 +33,7 @@ LOOP_SLEEP_SECONDS = 60
 MAX_CYCLES = 1
 
 EXECUTION_MODE = os.getenv("EXECUTION_MODE", "paper").lower()
-INVERT_EXECUTION_SIGNALS = os.getenv("INVERT_EXECUTION_SIGNALS", "1").lower() in {"1", "true", "yes", "on"}
+INVERT_EXECUTION_SIGNALS = os.getenv("INVERT_EXECUTION_SIGNALS", "0").lower() in {"1", "true", "yes", "on"}
 SLIPPAGE_RATE = 0.0005
 MAKER_FEE_RATE = 0.0002
 TAKER_FEE_RATE = 0.0005
