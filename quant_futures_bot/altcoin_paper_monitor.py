@@ -187,9 +187,6 @@ class AltcoinPaperMonitor:
                 frame = context["frame"]
                 price = context["price"]
                 latest_row = context["latest_row"]
-                if symbol in self.paused_symbols:
-                    self.log(f"symbol_paused symbol={symbol} reason={self.paused_symbols[symbol]}")
-                    continue
                 if symbol in self.pending_orders:
                     self.log(f"pending_order_wait symbol={symbol} exchange_order_id={self.pending_orders[symbol].get('exchange_order_id', '-')}")
                     continue
@@ -201,6 +198,9 @@ class AltcoinPaperMonitor:
                     fills_created += 1 if filled else 0
                     exchange_order_ids.extend(order_ids)
                     rejected += 0 if ok else 1
+                    continue
+                if symbol in self.paused_symbols:
+                    self.log(f"symbol_paused symbol={symbol} reason={self.paused_symbols[symbol]}")
                     continue
                 manager = StrategyManager(strategy_id=strategy_id, use_saved_selection=False)
                 market_state = detect_market_state(frame)
@@ -255,7 +255,8 @@ class AltcoinPaperMonitor:
         self.exchange_positions_summary = self.format_exchange_positions(snapshot.positions or {})
 
     def execute_signal(self, signal: SignalEvent, latest_row: dict) -> tuple[bool, bool, list[str]]:
-        if signal.symbol in self.paused_symbols:
+        opening = signal.signal_type in {SignalType.OPEN_LONG, SignalType.OPEN_SHORT}
+        if opening and signal.symbol in self.paused_symbols:
             self.log(f"signal_rejected symbol={signal.symbol} signal={signal.signal_type.value} reason=symbol paused")
             return False, False, []
         if signal.symbol in self.pending_orders:
