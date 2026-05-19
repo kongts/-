@@ -66,10 +66,12 @@ class BinanceAccountSync:
             }
             for symbol in symbols
         }
-        for item in self.exchange.fetch_positions(symbols):
+        try:
+            exchange_positions = self.exchange.fetch_positions()
+        except Exception:
+            exchange_positions = self.exchange.fetch_positions(symbols)
+        for item in exchange_positions:
             symbol = item.get("symbol")
-            if symbol not in positions:
-                continue
             contracts = abs(self._first_float(item.get("contracts"), item.get("contractSize"), 0.0))
             raw_side = str(item.get("side") or "").lower()
             info = item.get("info", {})

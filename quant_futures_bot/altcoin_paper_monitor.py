@@ -142,6 +142,7 @@ class AltcoinPaperMonitor:
             | self.local_open_symbols()
         )
         self.sync_exchange_account(sync_symbols)
+        sync_symbols = sorted(set(sync_symbols) | self.local_open_symbols())
         self.manage_pending_orders()
         self.sync_exchange_account(sync_symbols)
         signals_created = 0
@@ -150,7 +151,19 @@ class AltcoinPaperMonitor:
         rejected = 0
         exchange_order_ids: list[str] = []
         market_contexts: list[dict] = []
-        for leader in selected_leaders:
+        selected_by_symbol = {leader["symbol"]: leader for leader in selected_leaders}
+        context_items = list(selected_leaders)
+        for symbol in sorted(self.local_open_symbols() - set(selected_by_symbol)):
+            context_items.append(
+                {
+                    "symbol": symbol,
+                    "strategy_id": "position_risk_only",
+                    "strategy_name": "Position Risk Only",
+                    "timeframe": self.fallback_risk_timeframe(),
+                    "risk_only": True,
+                }
+            )
+        for leader in context_items:
             symbol = leader["symbol"]
             strategy_id = leader["strategy_id"]
             timeframe = leader["timeframe"]
@@ -167,6 +180,7 @@ class AltcoinPaperMonitor:
                         "price": price,
                         "latest_row": frame.iloc[-1].to_dict(),
                         "recent_drop": self.recent_drop(frame),
+                        "risk_only": bool(leader.get("risk_only", False)),
                     }
                 )
             except Exception as exc:
@@ -198,6 +212,8 @@ class AltcoinPaperMonitor:
                     fills_created += 1 if filled else 0
                     exchange_order_ids.extend(order_ids)
                     rejected += 0 if ok else 1
+                    continue
+                if context.get("risk_only"):
                     continue
                 if symbol in self.paused_symbols:
                     self.log(f"symbol_paused symbol={symbol} reason={self.paused_symbols[symbol]}")
@@ -632,6 +648,11 @@ class AltcoinPaperMonitor:
 
     def local_open_symbols(self) -> set[str]:
         return {symbol for symbol, pos in self.portfolio.positions.items() if pos.is_open()}
+
+    def fallback_risk_timeframe(self) -> str:
+        leaders = self.load_leaders()
+        timeframes = sorted({str(item.get("timeframe") or "") for item in leaders if item.get("timeframe")})
+        return timeframes[0] if timeframes else "15m"
 
     def account_summary(self) -> str:
         return (
