@@ -14,7 +14,7 @@ from . import config
 from .backtest import Backtester, BacktestResult
 from .data import MarketDataProvider
 from .historical_data import DEFAULT_ROOT as DEFAULT_HISTORICAL_ROOT
-from .historical_data import ohlcv_path, read_existing
+from .historical_data import ohlcv_path, parse_utc_date, read_existing
 from .indicators import add_indicators
 from .strategy_manager import StrategyManager
 
@@ -274,6 +274,8 @@ def backtest_top_volume(
     min_profitable_fold_ratio: float,
     strategy_workers: int = 1,
     data_root: Path | None = None,
+    data_start: str = "",
+    data_end: str = "",
 ) -> list[AltcoinBacktestScore]:
     provider = MarketDataProvider(use_exchange=True, fallback_to_synthetic=False)
     if provider.exchange is not None:
@@ -290,7 +292,16 @@ def backtest_top_volume(
             for timeframe in timeframes:
                 print(f"fetching_ohlcv {idx}/{len(top_symbols)} {symbol} timeframe={timeframe} limit={candle_limit}", flush=True)
                 try:
-                    frame = fetch_frame_with_retries(provider, symbol, timeframe, candle_limit, fetch_retries, data_root=data_root)
+                    frame = fetch_frame_with_retries(
+                        provider,
+                        symbol,
+                        timeframe,
+                        candle_limit,
+                        fetch_retries,
+                        data_root=data_root,
+                        data_start=data_start,
+                        data_end=data_end,
+                    )
                 except Exception as exc:
                     print(f"symbol_skipped symbol={symbol} timeframe={timeframe} reason=fetch_failed error={exc}", flush=True)
                     continue
@@ -373,9 +384,11 @@ def fetch_frame_with_retries(
     candle_limit: int,
     fetch_retries: int,
     data_root: Path | None = None,
+    data_start: str = "",
+    data_end: str = "",
 ) -> pd.DataFrame:
     if data_root is not None:
-        frame = read_cached_frame(data_root, symbol, timeframe, candle_limit)
+        frame = read_cached_frame(data_root, symbol, timeframe, candle_limit, data_start=data_start, data_end=data_end)
         if frame is not None:
             provider.last_source_by_symbol[symbol] = "local_csv"
             return add_indicators(frame)
@@ -392,14 +405,31 @@ def fetch_frame_with_retries(
     raise RuntimeError(str(last_error))
 
 
-def read_cached_frame(root: Path, symbol: str, timeframe: str, candle_limit: int) -> pd.DataFrame | None:
+def read_cached_frame(
+    root: Path,
+    symbol: str,
+    timeframe: str,
+    candle_limit: int,
+    data_start: str = "",
+    data_end: str = "",
+) -> pd.DataFrame | None:
     path = ohlcv_path(root, symbol, timeframe)
     if not path.exists():
         return None
     frame = read_existing(path)
     if frame.empty:
         return None
-    frame = frame.sort_values("timestamp").tail(candle_limit).reset_index(drop=True)
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+    if data_start:
+        frame = frame[frame["timestamp"] >= parse_utc_date(data_start)]
+    if data_end:
+        frame = frame[frame["timestamp"] < parse_utc_date(data_end)]
+    frame = frame.sort_values("timestamp")
+    if candle_limit > 0:
+        frame = frame.tail(candle_limit)
+    frame = frame.reset_index(drop=True)
+    if frame.empty:
+        return None
     print(f"cached_ohlcv symbol={symbol} timeframe={timeframe} rows={len(frame)} path={path}", flush=True)
     return frame
 
@@ -483,6 +513,8 @@ def main() -> None:
     parser.add_argument("--fetch-retries", type=int, default=1, help="OHLCV fetch retry count per symbol/timeframe")
     parser.add_argument("--strategy-workers", type=int, default=1, help="parallel worker processes for strategy backtests")
     parser.add_argument("--data-root", default="", help=f"read cached OHLCV csv.gz from this root; default example: {DEFAULT_HISTORICAL_ROOT}")
+    parser.add_argument("--data-start", default="", help="inclusive UTC start for cached OHLCV, e.g. 2022-01-01")
+    parser.add_argument("--data-end", default="", help="exclusive UTC end for cached OHLCV, e.g. now")
     parser.add_argument("--min-trades", type=int, default=4, help="minimum closed trades required to qualify")
     parser.add_argument("--min-side-ratio", type=float, default=0.0, help="minimum smaller-side trade ratio; 0 allows one-sided altcoin strategies")
     parser.add_argument("--fold-count", type=int, default=4, help="number of recent equity folds for stability check")
@@ -522,6 +554,8 @@ def main() -> None:
         min_profitable_fold_ratio=args.min_profitable_fold_ratio,
         strategy_workers=args.strategy_workers,
         data_root=data_root,
+        data_start=args.data_start,
+        data_end=args.data_end,
     )
     if rows:
         output = Path(args.output)

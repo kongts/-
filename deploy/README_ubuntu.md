@@ -18,7 +18,7 @@
 | --- | --- | --- | --- |
 | `quant-websocket.service` | 常驻服务 | 推荐 | 主流币 BTC/ETH/SOL WebSocket 监控并向 Testnet/Demo 下单 |
 | `quant-optimizer.timer` | 定时器 | 推荐 | 每 4 小时优化主流币策略 |
-| `quant-altcoin-optimizer.timer` | 定时器 | 推荐 | 每 1 小时优化山寨币策略 |
+| `quant-altcoin-optimizer.timer` | 定时器 | 推荐 | 每 1 周优化山寨币策略，先更新本地 2h K 线缓存 |
 | `quant-altcoin-websocket.service` | 常驻服务 | 推荐 | 山寨币 WebSocket 监控、每 60 秒实时信号检查、限价挂单 |
 | `quant-macro-optimizer.timer` | 定时器 | 推荐 | 每 4 小时优化宏观映射策略 |
 | `quant-macro-websocket.service` | 常驻服务 | 推荐 | 宏观映射 WebSocket 监控、每 60 秒实时信号检查、限价挂单 |
@@ -260,6 +260,13 @@ cd /opt/quant-futures-bot && rm -f quant_futures_bot/data/altcoin_optimizer.lock
 ```bash
 cd /opt/quant-futures-bot && /opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.historical_data --no-include-main --include-altcoin-top-volume --top 50 --start 2025-01-01 --end 2026-05-19 --timeframes 30m,2h
 cd /opt/quant-futures-bot && rm -f quant_futures_bot/data/altcoin_optimizer.lock && /opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 50 --limit 800 --timeframes 30m,2h --strategy-workers 4 --data-root quant_futures_bot/data/historical_ohlcv/binance_usdt_futures
+```
+
+当前自动山寨币优化服务已改为每周一次：先增量下载成交量前 50 自 2022 年以来的 `2h` K 线，再用 `--data-start 2022-01-01 --data-end now` 回测筛选策略。手动执行同等回测：
+
+```bash
+cd /opt/quant-futures-bot && /opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.historical_data --no-include-main --include-altcoin-top-volume --top 50 --start 2022-01-01 --end now --timeframes 2h --root quant_futures_bot/data/historical_ohlcv/binance_usdt_futures
+cd /opt/quant-futures-bot && rm -f quant_futures_bot/data/altcoin_optimizer.lock && /opt/miniconda/envs/quant-bot/bin/python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 50 --limit 30000 --timeframes 2h --strategy-workers 4 --data-root quant_futures_bot/data/historical_ohlcv/binance_usdt_futures --data-start 2022-01-01 --data-end now --min-trades 8 --fold-count 8 --min-profitable-fold-ratio 0.50
 ```
 
 ## 宏观映射服务

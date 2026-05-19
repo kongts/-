@@ -1,9 +1,9 @@
 [Unit]
-Description=Run Altcoin Aggressive Rolling Backtest Every 1 Hour
+Description=Run Altcoin 2h Cached Backtest Every 1 Week
 
 [Timer]
 OnBootSec=3min
-OnUnitActiveSec=1h
+OnUnitActiveSec=7d
 Unit=quant-altcoin-optimizer.service
 
 [Install]

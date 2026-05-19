@@ -109,6 +109,13 @@ python -m quant_futures_bot.historical_data --no-include-main --include-altcoin-
 python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 50 --limit 800 --timeframes 30m,2h --strategy-workers 4 --data-root quant_futures_bot/data/historical_ohlcv/binance_usdt_futures
 ```
 
+下载成交量前 50 山寨币自 2022 年以来的 `2h` K 线，并按 `2022-01-01` 到当前时间回测：
+
+```bash
+python -m quant_futures_bot.historical_data --no-include-main --include-altcoin-top-volume --top 50 --start 2022-01-01 --end now --timeframes 2h
+python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 50 --limit 30000 --timeframes 2h --strategy-workers 4 --data-root quant_futures_bot/data/historical_ohlcv/binance_usdt_futures --data-start 2022-01-01 --data-end now --min-trades 8 --fold-count 8 --min-profitable-fold-ratio 0.50
+```
+
 Windows 可直接运行对应 `.bat`：
 
 ```bat
@@ -134,7 +141,7 @@ run_close_all_positions.bat
 - 标的：Binance USDT 合约成交量前 100，排除部分主流币、稳定币和宏观映射类标的
 - 时间周期：默认 `15m`、`30m`；手动回测可用 `2h`
 - 策略候选：短周期动量突破、成交量突破、波动率扩张突破、10/20/40 突破、MA 回撤、RSI 动量、均值回归
-- 优化周期：每 1 小时
+- 优化周期：每 1 周，先增量下载本地 `2h` K 线缓存，再从 2022-01-01 回测筛选
 - 实时执行：默认每 60 秒执行一次 live signal check，同时保留 15m/30m 收线检查
 - 运行范围：最多 30 个 `score >= 0` 的组合
 - 策略文件：`quant_futures_bot/data/altcoin_strategy_latest.json`

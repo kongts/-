@@ -121,6 +121,8 @@ def backtest_macro_markets(
     min_profitable_fold_ratio: float,
     strategy_workers: int = 1,
     data_root: Path | None = None,
+    data_start: str = "",
+    data_end: str = "",
 ) -> list[MacroBacktestScore]:
     provider = MarketDataProvider(use_exchange=True, fallback_to_synthetic=False)
     if provider.exchange is not None:
@@ -143,7 +145,16 @@ def backtest_macro_markets(
             for timeframe in timeframes:
                 print(f"fetching_ohlcv_macro {idx}/{len(markets)} {market.symbol} timeframe={timeframe} limit={candle_limit}", flush=True)
                 try:
-                    frame = fetch_frame_with_retries(provider, market.symbol, timeframe, candle_limit, fetch_retries, data_root=data_root)
+                    frame = fetch_frame_with_retries(
+                        provider,
+                        market.symbol,
+                        timeframe,
+                        candle_limit,
+                        fetch_retries,
+                        data_root=data_root,
+                        data_start=data_start,
+                        data_end=data_end,
+                    )
                 except Exception as exc:
                     print(f"macro_symbol_skipped symbol={market.symbol} timeframe={timeframe} reason=fetch_failed error={exc}", flush=True)
                     continue
@@ -353,6 +364,7 @@ def run_once(args: argparse.Namespace) -> None:
         "macro_config "
         f"top={args.top} limit={args.limit} timeframes={args.timeframes} strategies={args.strategies} "
         f"strategy_workers={args.strategy_workers} data_root={args.data_root or '-'} "
+        f"data_start={args.data_start or '-'} data_end={args.data_end or '-'} "
         f"stop_loss={args.stop_loss_pct:.2%} take_profit={args.take_profit_pct:.2%} "
         f"max_margin_ratio={args.max_margin_ratio:.2%} leverage={args.leverage}x "
         f"min_trades={args.min_trades} min_side_ratio={args.min_side_ratio:.0%} "
@@ -385,6 +397,8 @@ def run_once(args: argparse.Namespace) -> None:
         min_profitable_fold_ratio=args.min_profitable_fold_ratio,
         strategy_workers=args.strategy_workers,
         data_root=Path(args.data_root) if args.data_root else None,
+        data_start=args.data_start,
+        data_end=args.data_end,
     )
     if not rows:
         log("no macro rows generated; Binance may not expose mapped macro symbols for this account/region")
@@ -433,6 +447,8 @@ def main() -> None:
     parser.add_argument("--fetch-retries", type=int, default=1, help="OHLCV fetch retry count")
     parser.add_argument("--strategy-workers", type=int, default=1, help="parallel worker processes for strategy backtests")
     parser.add_argument("--data-root", default="", help=f"read cached OHLCV csv.gz from this root; default example: {DEFAULT_HISTORICAL_ROOT}")
+    parser.add_argument("--data-start", default="", help="inclusive UTC start for cached OHLCV, e.g. 2022-01-01")
+    parser.add_argument("--data-end", default="", help="exclusive UTC end for cached OHLCV, e.g. now")
     parser.add_argument("--min-trades", type=int, default=6, help="minimum closed trades required to qualify")
     parser.add_argument("--min-side-ratio", type=float, default=0.10, help="minimum smaller-side trade ratio")
     parser.add_argument("--fold-count", type=int, default=4, help="number of equity folds for stability check")

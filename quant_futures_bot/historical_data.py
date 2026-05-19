@@ -51,6 +51,8 @@ class DownloadSummary:
 
 
 def parse_utc_date(value: str) -> pd.Timestamp:
+    if value.lower() in {"now", "today"}:
+        return pd.Timestamp.now(tz="UTC")
     timestamp = pd.Timestamp(value)
     if timestamp.tzinfo is None:
         return timestamp.tz_localize("UTC")
