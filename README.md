@@ -68,7 +68,7 @@ python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 100 --limit 
 山寨币 2h K 线回测：
 
 ```bash
-python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 50 --limit 800 --timeframes 2h --strategy-workers 4 --max-hold-bars-2h 12 --extended-hold-bars-2h 6 --show 30
+python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 100 --limit 800 --timeframes 2h --strategy-workers 4 --max-hold-bars-2h 12 --extended-hold-bars-2h 6 --show 30
 ```
 
 宏观映射回测优化：
@@ -102,18 +102,18 @@ python -m quant_futures_bot.close_all_positions --confirm YES
 python -m quant_futures_bot.historical_data --start 2022-01-01 --end 2026-01-01 --timeframes 15m,30m,1h,4h,6h --include-main --include-altcoin-latest --include-macro-latest
 ```
 
-下载成交量前 50 山寨币的 `30m/2h` K 线并用本地缓存回测：
+下载成交量前 100 山寨币的 `30m/2h` K 线并用本地缓存回测：
 
 ```bash
-python -m quant_futures_bot.historical_data --no-include-main --include-altcoin-top-volume --top 50 --start 2025-01-01 --end 2026-05-19 --timeframes 30m,2h
-python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 50 --limit 800 --timeframes 30m,2h --strategy-workers 4 --data-root quant_futures_bot/data/historical_ohlcv/binance_usdt_futures
+python -m quant_futures_bot.historical_data --no-include-main --include-altcoin-top-volume --top 100 --start 2025-01-01 --end 2026-05-19 --timeframes 30m,2h
+python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 100 --limit 800 --timeframes 30m,2h --strategy-workers 4 --data-root quant_futures_bot/data/historical_ohlcv/binance_usdt_futures
 ```
 
-下载成交量前 50 山寨币自 2022 年以来的 `2h` K 线，并按 `2022-01-01` 到当前时间回测：
+下载成交量前 100 山寨币自 2022 年以来的 `2h` K 线，并按 `2022-01-01` 到当前时间回测：
 
 ```bash
-python -m quant_futures_bot.historical_data --no-include-main --include-altcoin-top-volume --top 50 --start 2022-01-01 --end now --timeframes 2h
-python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 50 --limit 30000 --timeframes 2h --strategy-workers 4 --data-root quant_futures_bot/data/historical_ohlcv/binance_usdt_futures --data-start 2022-01-01 --data-end now --min-trades 8 --fold-count 8 --min-profitable-fold-ratio 0.50
+python -m quant_futures_bot.historical_data --no-include-main --include-altcoin-top-volume --top 100 --start 2022-01-01 --end now --timeframes 2h
+python -m quant_futures_bot.auto_altcoin_optimizer --run-once --top 100 --limit 30000 --timeframes 2h --strategy-workers 4 --data-root quant_futures_bot/data/historical_ohlcv/binance_usdt_futures --data-start 2022-01-01 --data-end now --min-trades 8 --fold-count 8 --min-profitable-fold-ratio 0.50
 ```
 
 Windows 可直接运行对应 `.bat`：
